@@ -1,0 +1,28 @@
+/target
+**/*.rs.bk
+*.pdb
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime
+/data*
+/logs
+*.log
+/backups
+/snapshots
+
+# Config overrides
+config/local.toml
+config/local*.toml
+
+# Mise
+.mise.*.toml

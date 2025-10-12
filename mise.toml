@@ -1,0 +1,213 @@
+# Mise configuration for Seshat
+# https://mise.jdx.dev/
+
+[tools]
+# Runtime versions
+rust = "1.90"
+# Note: RocksDB and protoc are installed via cargo/system packages
+
+[env]
+# Environment variables
+RUST_BACKTRACE = "1"
+RUST_LOG = "seshat=debug,raft=info"
+
+[tasks.install]
+description = "Install dependencies and tools"
+run = [
+    "rustup component add rustfmt clippy",
+    "cargo fetch",
+    # Check for protoc
+    "command -v protoc || echo '⚠️  Warning: protoc not found. Install with: brew install protobuf (macOS) or apt-get install protobuf-compiler (Linux)'",
+]
+
+[tasks.build]
+description = "Build all crates in workspace"
+run = "cargo build --workspace"
+
+[tasks."build:release"]
+description = "Build optimized release binary"
+run = "cargo build --workspace --release"
+
+[tasks.format]
+description = "Format all Rust code"
+run = "cargo fmt --all"
+
+[tasks."format:check"]
+description = "Check code formatting without modifying"
+run = "cargo fmt --all -- --check"
+
+[tasks.lint]
+description = "Run clippy linter"
+run = "cargo clippy --workspace --all-targets --all-features -- -D warnings"
+
+[tasks.test]
+description = "Run all tests"
+run = "cargo test --workspace"
+
+[tasks."test:unit"]
+description = "Run unit tests only"
+run = "cargo test --workspace --lib"
+
+[tasks."test:integration"]
+description = "Run integration tests only"
+run = "cargo test --workspace --test '*'"
+
+[tasks.dev]
+description = "Run tests in watch mode"
+depends = ["install"]
+run = """
+if ! command -v cargo-watch &> /dev/null; then
+    echo "Installing cargo-watch..."
+    cargo install cargo-watch
+fi
+cargo watch -x test
+"""
+
+[tasks.docker]
+description = "Build Docker image for Seshat"
+run = "docker build -t seshat:latest -f Dockerfile ."
+
+[tasks."docker:compose"]
+description = "Build all Docker Compose services"
+run = "docker-compose build"
+
+[tasks.start]
+description = "Start 5-node cluster with Docker Compose"
+depends = ["docker:compose"]
+run = """
+echo "Starting 5-node Seshat cluster..."
+echo "  - seshat-1: redis://localhost:6379, internal://localhost:7379"
+echo "  - seshat-2: redis://localhost:6380, internal://localhost:7380"
+echo "  - seshat-3: redis://localhost:6381, internal://localhost:7381"
+echo "  - seshat-4: redis://localhost:6382, internal://localhost:7382"
+echo "  - seshat-5: redis://localhost:6383, internal://localhost:7383"
+echo ""
+docker-compose up
+"""
+
+[tasks.stop]
+description = "Stop the cluster"
+run = "docker-compose down"
+
+[tasks.clean]
+description = "Clean build artifacts and test data"
+run = [
+    "cargo clean",
+    "rm -rf data1 data2 data3 data4 data5",
+    "rm -rf snapshots",
+]
+
+[tasks.check]
+description = "Run all checks (format, lint, test)"
+depends = ["format:check", "lint", "test"]
+
+[tasks.validate]
+description = "Full validation pipeline (format, lint, build, test)"
+run = [
+    "mise run format:check",
+    "mise run lint",
+    "mise run build",
+    "mise run test",
+]
+
+[tasks.proto]
+description = "Generate code from .proto files"
+run = """
+if [ -d "proto" ]; then
+    cargo build --package protocol
+    echo "✓ Protobuf code regenerated"
+else
+    echo "No proto/ directory found"
+fi
+"""
+
+# Cluster management tasks
+[tasks."cluster:logs"]
+description = "Tail logs from all cluster nodes"
+run = "docker-compose logs -f"
+
+[tasks."cluster:ps"]
+description = "Show cluster node status"
+run = "docker-compose ps"
+
+[tasks."cluster:restart"]
+description = "Restart the cluster"
+run = [
+    "docker-compose down",
+    "docker-compose up -d",
+]
+
+[tasks."cluster:reset"]
+description = "Reset cluster data (WARNING: deletes all data)"
+run = [
+    "docker-compose down -v",
+    "rm -rf data1 data2 data3",
+    "docker-compose up -d",
+]
+
+# Redis client tasks
+[tasks.redis-cli]
+description = "Connect to node 1 with redis-cli"
+run = "redis-cli -h localhost -p 6379"
+
+[tasks."redis:node1"]
+description = "Connect to node 1"
+run = "redis-cli -h localhost -p 6379"
+
+[tasks."redis:node2"]
+description = "Connect to node 2"
+run = "redis-cli -h localhost -p 6380"
+
+[tasks."redis:node3"]
+description = "Connect to node 3"
+run = "redis-cli -h localhost -p 6381"
+
+[tasks."redis:node4"]
+description = "Connect to node 4"
+run = "redis-cli -h localhost -p 6382"
+
+[tasks."redis:node5"]
+description = "Connect to node 5"
+run = "redis-cli -h localhost -p 6383"
+
+[tasks.benchmark]
+description = "Run redis-benchmark against the cluster"
+run = """
+if ! command -v redis-benchmark &> /dev/null; then
+    echo "⚠️  redis-benchmark not found. Install redis-tools."
+    exit 1
+fi
+redis-benchmark -h localhost -p 6379 -t get,set -n 100000 -q
+"""
+
+# Development helpers
+[tasks.docs]
+description = "Build and open Rust documentation"
+run = "cargo doc --workspace --no-deps --open"
+
+[tasks.expand]
+description = "Show macro expansion for a crate (usage: mise expand <crate>)"
+run = "cargo expand -p ${1:-seshat}"
+
+[tasks.tree]
+description = "Show dependency tree"
+run = "cargo tree --workspace"
+
+# Git hooks (optional)
+[tasks."hooks:install"]
+description = "Install git pre-commit hooks"
+run = """
+cat > .git/hooks/pre-commit << 'EOF'
+#!/bin/sh
+mise run format:check || {
+    echo "Code is not formatted. Run: mise format"
+    exit 1
+}
+mise run lint || {
+    echo "Clippy checks failed."
+    exit 1
+}
+EOF
+chmod +x .git/hooks/pre-commit
+echo "✓ Git pre-commit hook installed"
+"""

@@ -1,0 +1,38 @@
+# Seshat Node 2 Configuration (Bootstrap)
+
+[node]
+id = 2
+client_addr = "0.0.0.0:6379"      # Bind for Redis clients
+internal_addr = "0.0.0.0:7379"    # Bind for internal Raft RPC
+data_dir = "/var/lib/seshat"
+# advertise_addr auto-detected from hostname: "seshat-2:7379"
+
+[cluster]
+bootstrap = true  # Bootstrap mode for initial cluster formation
+
+# All founding members (same list on all 5 nodes)
+initial_members = [
+  {id = 1, addr = "seshat-1:7379"},
+  {id = 2, addr = "seshat-2:7379"},
+  {id = 3, addr = "seshat-3:7379"},
+  {id = 4, addr = "seshat-4:7379"},
+  {id = 5, addr = "seshat-5:7379"},
+]
+
+replication_factor = 3
+
+[raft]
+heartbeat_interval_ms = 100
+election_timeout_min_ms = 500
+election_timeout_max_ms = 1000
+snapshot_interval_entries = 10000
+snapshot_interval_bytes = 100000000  # 100MB
+max_log_size_bytes = 500000000       # 500MB
+
+[limits]
+max_key_size_bytes = 256
+max_value_size_bytes = 65536  # 64KB
+max_concurrent_client_connections = 10000
+max_memory_per_raft_log_mb = 512
+request_timeout_secs = 30
+raft_rpc_timeout_secs = 5

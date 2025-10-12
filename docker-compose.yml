@@ -1,0 +1,112 @@
+version: '3.8'
+
+services:
+  seshat-1:
+    build: .
+    image: seshat:latest
+    container_name: seshat-1
+    hostname: seshat-1
+    ports:
+      - "6379:6379"  # Redis client port
+      - "7379:7379"  # Internal Raft RPC port
+    volumes:
+      - ./data1:/var/lib/seshat
+      - ./config/node1.toml:/app/config/node.toml:ro
+    environment:
+      - NODE_ID=1
+      - RUST_LOG=seshat=debug,raft=info
+      - RUST_BACKTRACE=1
+    networks:
+      - seshat-net
+    restart: unless-stopped
+
+  seshat-2:
+    build: .
+    image: seshat:latest
+    container_name: seshat-2
+    hostname: seshat-2
+    ports:
+      - "6380:6379"  # Redis client port
+      - "7380:7379"  # Internal Raft RPC port
+    volumes:
+      - ./data2:/var/lib/seshat
+      - ./config/node2.toml:/app/config/node.toml:ro
+    environment:
+      - NODE_ID=2
+      - RUST_LOG=seshat=debug,raft=info
+      - RUST_BACKTRACE=1
+    networks:
+      - seshat-net
+    restart: unless-stopped
+    depends_on:
+      - seshat-1
+
+  seshat-3:
+    build: .
+    image: seshat:latest
+    container_name: seshat-3
+    hostname: seshat-3
+    ports:
+      - "6381:6379"  # Redis client port
+      - "7381:7379"  # Internal Raft RPC port
+    volumes:
+      - ./data3:/var/lib/seshat
+      - ./config/node3.toml:/app/config/node.toml:ro
+    environment:
+      - NODE_ID=3
+      - RUST_LOG=seshat=debug,raft=info
+      - RUST_BACKTRACE=1
+    networks:
+      - seshat-net
+    restart: unless-stopped
+    depends_on:
+      - seshat-1
+
+  seshat-4:
+    build: .
+    image: seshat:latest
+    container_name: seshat-4
+    hostname: seshat-4
+    ports:
+      - "6382:6379"  # Redis client port
+      - "7382:7379"  # Internal Raft RPC port
+    volumes:
+      - ./data4:/var/lib/seshat
+      - ./config/node4.toml:/app/config/node.toml:ro
+    environment:
+      - NODE_ID=4
+      - RUST_LOG=seshat=debug,raft=info
+      - RUST_BACKTRACE=1
+    networks:
+      - seshat-net
+    restart: unless-stopped
+    depends_on:
+      - seshat-1
+
+  seshat-5:
+    build: .
+    image: seshat:latest
+    container_name: seshat-5
+    hostname: seshat-5
+    ports:
+      - "6383:6379"  # Redis client port
+      - "7383:7379"  # Internal Raft RPC port
+    volumes:
+      - ./data5:/var/lib/seshat
+      - ./config/node5.toml:/app/config/node.toml:ro
+    environment:
+      - NODE_ID=5
+      - RUST_LOG=seshat=debug,raft=info
+      - RUST_BACKTRACE=1
+    networks:
+      - seshat-net
+    restart: unless-stopped
+    depends_on:
+      - seshat-1
+
+networks:
+  seshat-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

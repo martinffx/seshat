@@ -1,0 +1,238 @@
+{
+  "feature": "raft",
+  "user_story": "As a distributed systems engineer building Seshat, I want to implement Raft consensus with in-memory storage and gRPC transport so that I can achieve fault-tolerant strong consistency across a 3-node cluster without the complexity of persistent storage.",
+  "acceptance_criteria": [
+    "GIVEN a MemStorage implementation WHEN storing log entries THEN entries can be retrieved by index range",
+    "GIVEN a MemStorage implementation WHEN querying first_index/last_index THEN correct indices are returned",
+    "GIVEN Protobuf message definitions WHEN serializing Raft messages (AppendEntries, RequestVote) THEN they can be deserialized correctly",
+    "GIVEN a state machine WHEN applying a committed SET operation THEN the key-value is stored in the HashMap",
+    "GIVEN a state machine WHEN applying a committed DEL operation THEN the key is removed from the HashMap",
+    "GIVEN a state machine WHEN applying multiple operations THEN they are applied in order",
+    "GIVEN a configuration with bootstrap=true WHEN loading THEN it validates all required fields and initial_members",
+    "GIVEN a RaftNode wrapper WHEN created THEN it correctly initializes raft-rs RawNode with the provided configuration",
+    "GIVEN a gRPC server WHEN it receives a Raft RPC THEN it routes the message to the local RaftNode",
+    "GIVEN two RaftNodes connected via gRPC WHEN one sends a RequestVote message THEN the other receives and processes it",
+    "GIVEN two RaftNodes connected via gRPC WHEN one sends an AppendEntries message THEN the other receives and processes it"
+  ],
+  "business_rules": [
+    "Must use raft-rs library version 0.7+ (not implementing Raft from scratch)",
+    "Phase 1 uses MemStorage only - in-memory Vec/HashMap for Raft log and state (no RocksDB persistence)",
+    "Majority quorum (2 out of 3 nodes) is required for all write operations to commit",
+    "Must use gRPC (tonic 0.11+) for all inter-node Raft message exchange on port 7379",
+    "All 3 nodes participate in the single Raft group (no sharding in Phase 1)",
+    "Nodes identify each other using DNS names (e.g., 'kvstore-1:7379') or IP:port addresses",
+    "Must support three Raft RPC types: RequestVote, AppendEntries, and basic InstallSnapshot",
+    "Timing constraints: heartbeat_interval=100ms, election_timeout=500-1000ms, rpc_timeout=5s",
+    "Bootstrap mode: all 3 nodes start with same initial_members configuration list",
+    "Configuration validation: node_id > 0, initial_members includes this node, at least 3 members, no duplicate IDs",
+    "State machine operations limited to SET/GET/DEL on in-memory HashMap for Phase 1",
+    "Log compaction and snapshots are simplified for Phase 1 (full implementation in Phase 4)",
+    "Every node is identical - no special roles or separate gateway/metadata/data tiers",
+    "Must use tokio 1.x async runtime for all I/O operations",
+    "Structured logging with tracing for all Raft events (term changes, elections, replication)"
+  ],
+  "scope": {
+    "included": [
+      "Wrap raft-rs RawNode with application-specific RaftNode struct",
+      "Implement raft-rs Storage trait using MemStorage (in-memory HashMap/Vec for log entries)",
+      "Define gRPC service with Protobuf message types (AppendEntries, RequestVote, InstallSnapshot)",
+      "Define Protobuf schemas for Raft messages with proper field types",
+      "gRPC service definition (.proto file) for Raft RPC methods",
+      "Basic state machine that applies SET/GET/DEL operations to in-memory HashMap<Vec<u8>, Vec<u8>>",
+      "Cluster bootstrap logic: 3 nodes start with same initial membership configuration",
+      "Configuration structs for node ID, bind addresses, initial members, Raft timing parameters",
+      "Leader transfer on graceful shutdown",
+      "Structured logging for all Raft events using tracing + tracing-subscriber",
+      "gRPC server implementation (receives Raft RPCs on port 7379, routes to local RaftNode)",
+      "gRPC client implementation (RaftNode sends Raft messages to peer nodes)",
+      "Connection pooling using tonic's built-in features",
+      "Retry logic with exponential backoff for failed RPCs",
+      "Unit tests for Storage trait, state machine, message serialization, config validation",
+      "Integration test: 2-node message exchange (verify RequestVote/AppendEntries work via gRPC)"
+    ],
+    "excluded": [
+      "RocksDB persistent storage (deferred to rocksdb-storage spec - Phase 1 uses in-memory only)",
+      "RESP protocol parser/server (deferred to resp-protocol-mvp spec)",
+      "Multi-node cluster tests with 3+ nodes (leader election, failover) (deferred to chaos-testing spec)",
+      "Chaos tests: leader failure, network partitions, split-brain scenarios (separate chaos-testing spec)",
+      "Full log compaction and snapshot optimization (simplified for Phase 1, full in Phase 4)",
+      "Multiple Raft groups / sharding (Phase 2)",
+      "Dynamic membership changes (add/remove nodes) (Phase 3)",
+      "Prometheus metrics and monitoring (Phase 4)",
+      "Follower reads optimization (Phase 4)",
+      "Advanced snapshot transfer optimization with chunking (Phase 4)",
+      "Performance tuning and benchmarking (Phase 4)"
+    ]
+  },
+  "dependencies": {
+    "requires": [
+      "common crate: NodeId, Term, LogIndex, Key, Value types",
+      "common crate: RaftHardState, VersionedLogEntry, SnapshotMetadata types",
+      "common crate: NodeConfig, ClusterConfig, RaftConfig structs",
+      "common crate: ClusterMembership, NodeInfo, NodeState types",
+      "common crate: Error enum with NotLeader, NoQuorum variants",
+      "tokio 1.x runtime with full features",
+      "raft-rs 0.7+ library",
+      "tonic 0.11+ and prost 0.12+ for gRPC",
+      "tracing + tracing-subscriber for structured logging",
+      "thiserror for error definitions"
+    ],
+    "used_by": [
+      "seshat binary (main orchestration crate)",
+      "protocol crate (gRPC service definitions)",
+      "storage crate (future RocksDB integration in rocksdb-storage spec)"
+    ]
+  },
+  "technical_details": {
+    "raft_implementation": {
+      "library": "raft-rs 0.7+",
+      "approach": "Wrap RawNode (not Raft) for message-level control, implement Storage trait",
+      "storage_trait_methods": [
+        "initial_state() -> Result<(HardState, ConfState)> - Return initial Raft state",
+        "entries(low: u64, high: u64, max_size: Option<u64>) -> Result<Vec<Entry>> - Retrieve log entries",
+        "term(index: u64) -> Result<u64> - Get term for specific log index",
+        "first_index() -> Result<u64> - Get first available log index",
+        "last_index() -> Result<u64> - Get last available log index",
+        "snapshot() -> Result<Snapshot> - Get current snapshot"
+      ],
+      "in_memory_storage": {
+        "log_entries": "Vec<Entry> for Raft log storage",
+        "hard_state": "RaftHardState { version: u8, term: u64, vote: Option<u64>, commit: u64 }",
+        "conf_state": "ConfState with voters and learners lists",
+        "implementation": "Use raft-rs built-in MemStorage or implement simple wrapper"
+      },
+      "ready_processing": "Call tick() periodically, process Ready: persist → send messages → apply → advance",
+      "bootstrap": "Create Raft group with all 3 members in initial configuration"
+    },
+    "grpc_transport": {
+      "framework": "tonic 0.11+ (gRPC framework) + prost 0.12+ (Protobuf serialization)",
+      "port": 7379,
+      "messages": [
+        "AppendEntries: { term, leader_id, prev_log_index, prev_log_term, entries[], leader_commit }",
+        "RequestVote: { term, candidate_id, last_log_index, last_log_term }",
+        "InstallSnapshot: { term, leader_id, last_included_index, last_included_term, data, done }"
+      ],
+      "client": {
+        "connection_pooling": "One connection pool per peer node",
+        "retry_logic": "Exponential backoff for failed RPCs",
+        "timeout": "5 seconds RPC timeout"
+      },
+      "server": {
+        "bind_address": "0.0.0.0:7379",
+        "async_handlers": "All RPC handlers are async with tokio"
+      },
+      "features": [
+        "HTTP/2 connection multiplexing",
+        "Streaming support for snapshot transfers",
+        "Connection reuse across multiple RPCs"
+      ]
+    },
+    "state_machine": {
+      "storage": "HashMap<Vec<u8>, Vec<u8>> for key-value pairs",
+      "operations": [
+        "SET key value - Insert or update key-value pair",
+        "DEL key - Remove key-value pair"
+      ],
+      "reads": "GET key - Read from HashMap (leader-only reads in Phase 1)",
+      "apply_logic": "Process committed log entries and execute operations against HashMap",
+      "serialization": "Operations serialized as Protobuf messages in log entries"
+    },
+    "configuration": {
+      "bootstrap": {
+        "mode": "All 3 nodes start with identical initial_members list",
+        "node_config": "{ id: u64, client_addr: '0.0.0.0:6379', internal_addr: '0.0.0.0:7379', data_dir: Path }",
+        "cluster_config": "{ bootstrap: true, initial_members: Vec<NodeInfo>, replication_factor: 3 }",
+        "example_member": "NodeInfo { id: 1, addr: 'kvstore-1:7379', state: NodeState::Active, joined_at: timestamp }"
+      },
+      "raft_timing": {
+        "heartbeat_interval_ms": 100,
+        "election_timeout_min_ms": 500,
+        "election_timeout_max_ms": 1000,
+        "raft_rpc_timeout_secs": 5
+      },
+      "validation": [
+        "node_id must be > 0",
+        "initial_members must include this node's ID",
+        "At least 3 members required for fault tolerance",
+        "No duplicate node IDs allowed",
+        "replication_factor must be odd (3 in Phase 1)"
+      ]
+    },
+    "async_runtime": {
+      "library": "tokio 1.x with full features",
+      "usage": [
+        "All I/O operations are async",
+        "Timer-driven tick() calls for Raft",
+        "Async gRPC handlers",
+        "Background tasks for message processing"
+      ]
+    },
+    "logging": {
+      "library": "tracing + tracing-subscriber",
+      "requirements": [
+        "Structured logging for all Raft events",
+        "Log term changes, elections, log replication, commits",
+        "Use #[instrument] attribute for async functions",
+        "JSON output format for production environments",
+        "Include context: node_id, term, log_index in all events"
+      ]
+    },
+    "error_handling": {
+      "libraries": "thiserror for Error enum definition, anyhow for binary/main",
+      "required_errors": [
+        "NotLeader { leader_id: Option<u64> }",
+        "NoQuorum",
+        "RaftError(raft::Error)",
+        "StorageError",
+        "RpcError",
+        "ConfigError"
+      ],
+      "patterns": [
+        "All errors include context via #[error(...)]",
+        "Propagate errors with ? operator",
+        "Fail fast: validate configuration on startup"
+      ]
+    },
+    "testing": {
+      "unit": [
+        "Storage trait implementation: initial_state, entries, term, first_index, last_index, snapshot",
+        "State machine apply logic for SET/DEL operations",
+        "State machine applies operations in correct order",
+        "Configuration validation rules (node_id validation, duplicate IDs, etc.)",
+        "Protobuf message serialization/deserialization",
+        "Error type conversions and context",
+        "RaftNode initialization with valid configuration"
+      ],
+      "tools": [
+        "tokio-test for async test utilities (if needed for state machine)",
+        "proptest for property-based testing of edge cases"
+      ],
+      "tdd_workflow": [
+        "1. Write test case for specific functionality",
+        "2. Write minimal implementation to pass test",
+        "3. Refactor code while keeping tests green",
+        "4. Repeat for next functionality"
+      ]
+    }
+  },
+  "aligns_with": "Phase 1 MVP: Single shard cluster with Raft consensus, in-memory storage, 3-node fault tolerance",
+  "success_metrics": [
+    "Storage trait fully implemented: all methods (initial_state, entries, term, first_index, last_index, snapshot) working correctly",
+    "MemStorage can store and retrieve log entries by index range",
+    "MemStorage correctly tracks first_index and last_index",
+    "State machine correctly applies SET operations to HashMap",
+    "State machine correctly applies DEL operations to HashMap",
+    "State machine correctly applies operations in order",
+    "Protobuf definitions compile and messages serialize/deserialize correctly",
+    "RaftNode wrapper successfully initializes raft-rs RawNode with configuration",
+    "Configuration validation catches all invalid configurations (missing node_id, duplicate IDs, etc.)",
+    "gRPC server starts on port 7379 and accepts Raft RPC connections",
+    "gRPC server receives Raft RPCs and successfully routes them to local RaftNode",
+    "gRPC client successfully sends Raft messages to peer nodes",
+    "Integration test passes: 2 nodes exchange RequestVote and AppendEntries messages via gRPC",
+    "Connection pooling works correctly with multiple peers",
+    "Retry logic handles failed RPCs with exponential backoff",
+    "100% test coverage for Storage trait and state machine implementation",
+    "All unit tests pass with no panics or unwraps"
+  ]
+}

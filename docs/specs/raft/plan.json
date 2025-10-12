@@ -1,0 +1,837 @@
+{
+  "feature": "raft-consensus",
+  "description": "Distributed consensus implementation using raft-rs with in-memory storage for Phase 1",
+  "architecture_pattern": "Protocol → Raft Layer → Storage Layer (NOT Router → Service → Repository)",
+  "tdd_approach": "Write Test → Implement Minimal → Refactor → Repeat",
+
+  "phases": {
+    "phase_1_common_foundation": {
+      "name": "Common Types Foundation",
+      "description": "Shared types and error handling used by all other components",
+      "dependencies": [],
+      "tasks": [
+        "common_types",
+        "common_errors"
+      ],
+      "estimated_duration": "1 hour"
+    },
+    "phase_2_configuration": {
+      "name": "Configuration Types",
+      "description": "Node, cluster, and Raft configuration with validation",
+      "dependencies": ["phase_1_common_foundation"],
+      "tasks": [
+        "config_types",
+        "config_validation",
+        "config_defaults"
+      ],
+      "estimated_duration": "2 hours"
+    },
+    "phase_3_protocol_definitions": {
+      "name": "Protocol Definitions",
+      "description": "Protobuf message schemas for Raft RPC and operation types",
+      "dependencies": ["phase_1_common_foundation"],
+      "tasks": [
+        "protobuf_messages",
+        "operation_types"
+      ],
+      "estimated_duration": "2 hours"
+    },
+    "phase_4_storage_layer": {
+      "name": "Storage Layer",
+      "description": "In-memory storage implementing raft-rs Storage trait",
+      "dependencies": ["phase_1_common_foundation"],
+      "tasks": [
+        "mem_storage_skeleton",
+        "mem_storage_initial_state",
+        "mem_storage_entries",
+        "mem_storage_term",
+        "mem_storage_first_last_index",
+        "mem_storage_snapshot",
+        "mem_storage_mutations"
+      ],
+      "estimated_duration": "4 hours"
+    },
+    "phase_5_state_machine": {
+      "name": "State Machine",
+      "description": "Apply committed log entries to in-memory key-value store",
+      "dependencies": ["phase_1_common_foundation", "phase_3_protocol_definitions"],
+      "tasks": [
+        "state_machine_core",
+        "state_machine_operations",
+        "state_machine_snapshot"
+      ],
+      "estimated_duration": "3 hours"
+    },
+    "phase_6_raft_node": {
+      "name": "Raft Node",
+      "description": "RaftNode wrapper around raft-rs RawNode with Ready processing",
+      "dependencies": ["phase_2_configuration", "phase_4_storage_layer", "phase_5_state_machine"],
+      "tasks": [
+        "raft_node_initialization",
+        "raft_node_tick",
+        "raft_node_propose",
+        "raft_node_ready_handler",
+        "raft_node_leader_queries"
+      ],
+      "estimated_duration": "5 hours"
+    },
+    "phase_7_integration": {
+      "name": "Integration Testing",
+      "description": "Single-node integration tests to verify all components work together",
+      "dependencies": ["phase_6_raft_node"],
+      "tasks": [
+        "single_node_bootstrap",
+        "single_node_propose_apply"
+      ],
+      "estimated_duration": "2 hours"
+    }
+  },
+
+  "tasks": {
+    "common_types": {
+      "id": "common_types",
+      "phase": "phase_1_common_foundation",
+      "order": 1,
+      "title": "Common Type Aliases",
+      "description": "Define NodeId, Term, LogIndex type aliases for consistent usage across crates",
+      "component": "common/types",
+      "tdd_cycle": {
+        "test": "Write tests for type conversions and basic usage",
+        "implement": "Define type aliases as u64",
+        "refactor": "Add doc comments and usage examples"
+      },
+      "files_to_create": [
+        "crates/common/src/types.rs"
+      ],
+      "files_to_modify": [
+        "crates/common/src/lib.rs"
+      ],
+      "test_file": "crates/common/src/types.rs (inline tests)",
+      "acceptance_criteria": [
+        "NodeId, Term, LogIndex type aliases defined",
+        "Type aliases are u64",
+        "Doc comments explain usage",
+        "Compile without warnings"
+      ],
+      "estimated_time": "30 minutes"
+    },
+
+    "common_errors": {
+      "id": "common_errors",
+      "phase": "phase_1_common_foundation",
+      "order": 2,
+      "title": "Common Error Types",
+      "description": "Define Error enum with variants for Raft, Storage, Config, and Serialization errors",
+      "component": "common/errors",
+      "tdd_cycle": {
+        "test": "Write tests for error creation, formatting, and conversion from raft::Error",
+        "implement": "Define Error enum with thiserror, implement From<raft::Error>",
+        "refactor": "Add context to error messages"
+      },
+      "files_to_create": [
+        "crates/common/src/errors.rs"
+      ],
+      "files_to_modify": [
+        "crates/common/src/lib.rs",
+        "crates/common/Cargo.toml"
+      ],
+      "dependencies_to_add": {
+        "thiserror": "1.0"
+      },
+      "test_file": "crates/common/src/errors.rs (inline tests)",
+      "acceptance_criteria": [
+        "Error enum with NotLeader, NoQuorum, Raft, Storage, ConfigError, Serialization variants",
+        "Implements std::error::Error via thiserror",
+        "From<raft::Error> conversion implemented",
+        "Error messages are descriptive",
+        "All tests pass"
+      ],
+      "estimated_time": "30 minutes"
+    },
+
+    "config_types": {
+      "id": "config_types",
+      "phase": "phase_2_configuration",
+      "order": 3,
+      "title": "Configuration Data Types",
+      "description": "Define NodeConfig, ClusterConfig, RaftConfig, InitialMember structs",
+      "component": "raft/config",
+      "tdd_cycle": {
+        "test": "Write tests for config creation and serde serialization/deserialization",
+        "implement": "Define config structs with serde derives",
+        "refactor": "Add builder patterns if needed"
+      },
+      "files_to_create": [
+        "crates/raft/src/config.rs"
+      ],
+      "files_to_modify": [
+        "crates/raft/src/lib.rs",
+        "crates/raft/Cargo.toml"
+      ],
+      "dependencies_to_add": {
+        "common": { "path": "../common" },
+        "serde": { "version": "1.0", "features": ["derive"] },
+        "thiserror": "1.0"
+      },
+      "test_file": "crates/raft/tests/config_tests.rs",
+      "acceptance_criteria": [
+        "NodeConfig with id, client_addr, internal_addr, data_dir, advertise_addr",
+        "ClusterConfig with bootstrap, initial_members, replication_factor",
+        "RaftConfig with timing parameters",
+        "InitialMember with id and addr",
+        "All types derive Debug, Clone, Serialize, Deserialize",
+        "Compiles without warnings"
+      ],
+      "estimated_time": "1 hour"
+    },
+
+    "config_validation": {
+      "id": "config_validation",
+      "phase": "phase_2_configuration",
+      "order": 4,
+      "title": "Configuration Validation",
+      "description": "Implement validation logic for NodeConfig, ClusterConfig, RaftConfig",
+      "component": "raft/config",
+      "tdd_cycle": {
+        "test": "Write tests for valid and invalid configs (node_id=0, missing members, invalid timeouts)",
+        "implement": "Add validate() methods to each config type",
+        "refactor": "Extract common validation helpers"
+      },
+      "files_to_modify": [
+        "crates/raft/src/config.rs"
+      ],
+      "test_file": "crates/raft/tests/config_tests.rs",
+      "acceptance_criteria": [
+        "NodeConfig::validate() checks id > 0, valid addresses, writable data_dir",
+        "ClusterConfig::validate() checks >= 3 members, no duplicates, node in members",
+        "RaftConfig::validate() checks election_timeout >= heartbeat * 2",
+        "Invalid configs return descriptive errors",
+        "All validation tests pass"
+      ],
+      "estimated_time": "1 hour"
+    },
+
+    "config_defaults": {
+      "id": "config_defaults",
+      "phase": "phase_2_configuration",
+      "order": 5,
+      "title": "Configuration Default Values",
+      "description": "Implement Default trait for RaftConfig with production-ready values",
+      "component": "raft/config",
+      "tdd_cycle": {
+        "test": "Write test to verify default values match design spec",
+        "implement": "Implement Default for RaftConfig",
+        "refactor": "Document rationale for each default value"
+      },
+      "files_to_modify": [
+        "crates/raft/src/config.rs"
+      ],
+      "test_file": "crates/raft/tests/config_tests.rs",
+      "acceptance_criteria": [
+        "RaftConfig::default() returns heartbeat_interval_ms=100",
+        "election_timeout_min_ms=500, election_timeout_max_ms=1000",
+        "snapshot_interval_entries=10_000, snapshot_interval_bytes=100MB",
+        "max_log_size_bytes=500MB",
+        "Test verifies all default values"
+      ],
+      "estimated_time": "30 minutes"
+    },
+
+    "protobuf_messages": {
+      "id": "protobuf_messages",
+      "phase": "phase_3_protocol_definitions",
+      "order": 6,
+      "title": "Protobuf Message Definitions",
+      "description": "Define Raft RPC message schemas in .proto file and configure build.rs",
+      "component": "protocol/raft_rpc",
+      "tdd_cycle": {
+        "test": "Write tests for message serialization/deserialization roundtrips",
+        "implement": "Create raft.proto with RequestVote, AppendEntries, InstallSnapshot messages",
+        "refactor": "Organize messages and add comprehensive comments"
+      },
+      "files_to_create": [
+        "crates/protocol/proto/raft.proto",
+        "crates/protocol/build.rs",
+        "crates/protocol/src/lib.rs"
+      ],
+      "files_to_modify": [
+        "crates/protocol/Cargo.toml"
+      ],
+      "dependencies_to_add": {
+        "common": { "path": "../common" },
+        "tonic": "0.11",
+        "prost": "0.12",
+        "serde": { "version": "1.0", "features": ["derive"] }
+      },
+      "build_dependencies_to_add": {
+        "tonic-build": "0.11"
+      },
+      "test_file": "crates/protocol/tests/protobuf_tests.rs",
+      "acceptance_criteria": [
+        "raft.proto defines RaftService with RequestVote, AppendEntries, InstallSnapshot RPCs",
+        "Message types: RequestVoteRequest/Response, AppendEntriesRequest/Response, etc.",
+        "LogEntry and EntryType enum defined",
+        "build.rs compiles .proto to Rust code",
+        "cargo build succeeds and generates code",
+        "Roundtrip serialization tests pass"
+      ],
+      "estimated_time": "1.5 hours"
+    },
+
+    "operation_types": {
+      "id": "operation_types",
+      "phase": "phase_3_protocol_definitions",
+      "order": 7,
+      "title": "Operation Types",
+      "description": "Define Operation enum (Set, Del) with serialization and apply logic",
+      "component": "protocol/operations",
+      "tdd_cycle": {
+        "test": "Write tests for Operation::apply() and serialization",
+        "implement": "Define Operation enum with Set and Del variants",
+        "refactor": "Extract apply logic into trait methods"
+      },
+      "files_to_create": [
+        "crates/protocol/src/operations.rs"
+      ],
+      "files_to_modify": [
+        "crates/protocol/src/lib.rs",
+        "crates/protocol/Cargo.toml"
+      ],
+      "dependencies_to_add": {
+        "bincode": "1.3"
+      },
+      "test_file": "crates/protocol/src/operations.rs (inline tests)",
+      "acceptance_criteria": [
+        "Operation::Set { key, value } variant",
+        "Operation::Del { key } variant",
+        "Operation::apply(&self, data: &mut HashMap) implemented",
+        "Operation::serialize() and ::deserialize() using bincode",
+        "Set returns b\"OK\", Del returns b\"1\" or b\"0\"",
+        "All tests pass"
+      ],
+      "estimated_time": "30 minutes"
+    },
+
+    "mem_storage_skeleton": {
+      "id": "mem_storage_skeleton",
+      "phase": "phase_4_storage_layer",
+      "order": 8,
+      "title": "MemStorage Structure",
+      "description": "Define MemStorage struct with RwLock fields for hard_state, conf_state, entries, snapshot",
+      "component": "raft/storage",
+      "tdd_cycle": {
+        "test": "Write test for MemStorage::new() creation",
+        "implement": "Define MemStorage struct with internal fields",
+        "refactor": "Add internal helper methods"
+      },
+      "files_to_create": [
+        "crates/raft/src/storage.rs"
+      ],
+      "files_to_modify": [
+        "crates/raft/src/lib.rs",
+        "crates/raft/Cargo.toml"
+      ],
+      "dependencies_to_add": {
+        "raft": "0.7",
+        "tokio": { "version": "1", "features": ["full"] }
+      },
+      "test_file": "crates/raft/tests/storage_tests.rs",
+      "acceptance_criteria": [
+        "MemStorage struct with hard_state: RwLock<HardState>",
+        "conf_state: RwLock<ConfState>, entries: RwLock<Vec<Entry>>",
+        "snapshot: RwLock<Snapshot>",
+        "MemStorage::new() creates instance with defaults",
+        "Compiles with raft-rs imports"
+      ],
+      "estimated_time": "30 minutes"
+    },
+
+    "mem_storage_initial_state": {
+      "id": "mem_storage_initial_state",
+      "phase": "phase_4_storage_layer",
+      "order": 9,
+      "title": "Storage: initial_state()",
+      "description": "Implement Storage::initial_state() to return hard state and conf state",
+      "component": "raft/storage",
+      "tdd_cycle": {
+        "test": "Write test: new storage returns default HardState and ConfState",
+        "implement": "Implement initial_state() reading from RwLocks",
+        "refactor": "Handle edge cases and add logging"
+      },
+      "files_to_modify": [
+        "crates/raft/src/storage.rs"
+      ],
+      "test_file": "crates/raft/tests/storage_tests.rs",
+      "acceptance_criteria": [
+        "initial_state() returns RaftState with HardState and ConfState",
+        "New storage returns default values (term=0, vote=None, commit=0)",
+        "After set_hard_state(), initial_state() reflects changes",
+        "Test passes"
+      ],
+      "estimated_time": "30 minutes"
+    },
+
+    "mem_storage_entries": {
+      "id": "mem_storage_entries",
+      "phase": "phase_4_storage_layer",
+      "order": 10,
+      "title": "Storage: entries()",
+      "description": "Implement Storage::entries() to return log entries in range [low, high)",
+      "component": "raft/storage",
+      "tdd_cycle": {
+        "test": "Write tests: empty range, normal range, max_size limit, compacted range, unavailable range",
+        "implement": "Implement entries() with bounds checking",
+        "refactor": "Optimize slice operations"
+      },
+      "files_to_modify": [
+        "crates/raft/src/storage.rs"
+      ],
+      "test_file": "crates/raft/tests/storage_tests.rs",
+      "acceptance_criteria": [
+        "entries(low, high, None) returns entries in [low, high) range",
+        "entries(low, high, Some(max_size)) respects size limit",
+        "Returns StorageError::Compacted if low < first_index()",
+        "Returns StorageError::Unavailable if high > last_index() + 1",
+        "All edge case tests pass"
+      ],
+      "estimated_time": "1 hour"
+    },
+
+    "mem_storage_term": {
+      "id": "mem_storage_term",
+      "phase": "phase_4_storage_layer",
+      "order": 11,
+      "title": "Storage: term()",
+      "description": "Implement Storage::term() to return term for entry at given index",
+      "component": "raft/storage",
+      "tdd_cycle": {
+        "test": "Write tests: term for valid index, index=0, compacted index, unavailable index",
+        "implement": "Implement term() with snapshot fallback",
+        "refactor": "Add bounds checking"
+      },
+      "files_to_modify": [
+        "crates/raft/src/storage.rs"
+      ],
+      "test_file": "crates/raft/tests/storage_tests.rs",
+      "acceptance_criteria": [
+        "term(0) returns 0 (special case)",
+        "term(index) returns entry.term for valid index",
+        "Returns snapshot.metadata.term if index == snapshot.metadata.index",
+        "Returns error for compacted or unavailable indices",
+        "All tests pass"
+      ],
+      "estimated_time": "30 minutes"
+    },
+
+    "mem_storage_first_last_index": {
+      "id": "mem_storage_first_last_index",
+      "phase": "phase_4_storage_layer",
+      "order": 12,
+      "title": "Storage: first_index() and last_index()",
+      "description": "Implement Storage::first_index() and last_index() methods",
+      "component": "raft/storage",
+      "tdd_cycle": {
+        "test": "Write tests: empty log, after append, after compaction, after snapshot",
+        "implement": "Implement both methods using entries and snapshot",
+        "refactor": "Maintain invariant: first_index <= last_index + 1"
+      },
+      "files_to_modify": [
+        "crates/raft/src/storage.rs"
+      ],
+      "test_file": "crates/raft/tests/storage_tests.rs",
+      "acceptance_criteria": [
+        "first_index() returns snapshot.metadata.index + 1 (or 1 if no snapshot)",
+        "last_index() returns index of last entry (or snapshot.metadata.index if empty)",
+        "Invariant maintained: first_index <= last_index + 1",
+        "All tests pass"
+      ],
+      "estimated_time": "30 minutes"
+    },
+
+    "mem_storage_snapshot": {
+      "id": "mem_storage_snapshot",
+      "phase": "phase_4_storage_layer",
+      "order": 13,
+      "title": "Storage: snapshot()",
+      "description": "Implement Storage::snapshot() to return current snapshot",
+      "component": "raft/storage",
+      "tdd_cycle": {
+        "test": "Write tests: empty snapshot, after create_snapshot()",
+        "implement": "Implement snapshot() reading from RwLock",
+        "refactor": "Handle snapshot not ready cases"
+      },
+      "files_to_modify": [
+        "crates/raft/src/storage.rs"
+      ],
+      "test_file": "crates/raft/tests/storage_tests.rs",
+      "acceptance_criteria": [
+        "snapshot(request_index) returns current snapshot",
+        "Phase 1: Simplified implementation, just return stored snapshot",
+        "Returns SnapshotTemporarilyUnavailable if not ready (Phase 2+)",
+        "Test passes"
+      ],
+      "estimated_time": "30 minutes"
+    },
+
+    "mem_storage_mutations": {
+      "id": "mem_storage_mutations",
+      "phase": "phase_4_storage_layer",
+      "order": 14,
+      "title": "Storage Mutation Methods",
+      "description": "Implement append(), set_hard_state(), set_conf_state(), compact(), create_snapshot()",
+      "component": "raft/storage",
+      "tdd_cycle": {
+        "test": "Write tests for each mutation method",
+        "implement": "Implement all mutation methods",
+        "refactor": "Ensure thread safety with RwLocks"
+      },
+      "files_to_modify": [
+        "crates/raft/src/storage.rs"
+      ],
+      "test_file": "crates/raft/tests/storage_tests.rs",
+      "acceptance_criteria": [
+        "append(&[Entry]) extends log entries",
+        "set_hard_state(HardState) updates hard state",
+        "set_conf_state(ConfState) updates conf state",
+        "compact(index) removes entries before index",
+        "create_snapshot(index, data) creates new snapshot",
+        "All mutation tests pass"
+      ],
+      "estimated_time": "1 hour"
+    },
+
+    "state_machine_core": {
+      "id": "state_machine_core",
+      "phase": "phase_5_state_machine",
+      "order": 15,
+      "title": "StateMachine Core Structure",
+      "description": "Define StateMachine struct with HashMap and last_applied index",
+      "component": "raft/state_machine",
+      "tdd_cycle": {
+        "test": "Write tests for new(), get(), exists()",
+        "implement": "Define StateMachine with data HashMap and last_applied",
+        "refactor": "Add internal helpers"
+      },
+      "files_to_create": [
+        "crates/raft/src/state_machine.rs"
+      ],
+      "files_to_modify": [
+        "crates/raft/src/lib.rs"
+      ],
+      "test_file": "crates/raft/tests/state_machine_tests.rs",
+      "acceptance_criteria": [
+        "StateMachine struct with data: HashMap<Vec<u8>, Vec<u8>>",
+        "last_applied: u64 field",
+        "new() creates empty state machine",
+        "get(key) returns Option<Vec<u8>>",
+        "exists(key) returns bool",
+        "Basic tests pass"
+      ],
+      "estimated_time": "1 hour"
+    },
+
+    "state_machine_operations": {
+      "id": "state_machine_operations",
+      "phase": "phase_5_state_machine",
+      "order": 16,
+      "title": "StateMachine Apply Operations",
+      "description": "Implement apply() to deserialize and execute Set/Del operations",
+      "component": "raft/state_machine",
+      "tdd_cycle": {
+        "test": "Write tests: apply Set, apply Del, operation ordering, idempotency",
+        "implement": "Implement apply(entry) with Operation deserialization",
+        "refactor": "Extract operation execution logic"
+      },
+      "files_to_modify": [
+        "crates/raft/src/state_machine.rs"
+      ],
+      "test_file": "crates/raft/tests/state_machine_tests.rs",
+      "acceptance_criteria": [
+        "apply(entry) deserializes Operation from entry.data",
+        "Checks entry.index > last_applied for idempotency",
+        "Calls Operation::apply() on HashMap",
+        "Updates last_applied = entry.index",
+        "Returns result bytes (b\"OK\" or b\"1\"/b\"0\")",
+        "All operation tests pass including ordering and idempotency"
+      ],
+      "estimated_time": "1.5 hours"
+    },
+
+    "state_machine_snapshot": {
+      "id": "state_machine_snapshot",
+      "phase": "phase_5_state_machine",
+      "order": 17,
+      "title": "StateMachine Snapshot and Restore",
+      "description": "Implement snapshot() and restore() for state machine serialization",
+      "component": "raft/state_machine",
+      "tdd_cycle": {
+        "test": "Write tests: snapshot with data, restore from snapshot, snapshot roundtrip",
+        "implement": "Implement snapshot() using bincode, restore() to deserialize",
+        "refactor": "Add version field to snapshot format"
+      },
+      "files_to_modify": [
+        "crates/raft/src/state_machine.rs"
+      ],
+      "test_file": "crates/raft/tests/state_machine_tests.rs",
+      "acceptance_criteria": [
+        "snapshot() serializes SnapshotData { version: 1, last_applied, data }",
+        "restore(bytes) deserializes and replaces HashMap and last_applied",
+        "Roundtrip test: SET keys, snapshot, restore to new SM, verify data matches",
+        "All snapshot tests pass"
+      ],
+      "estimated_time": "30 minutes"
+    },
+
+    "raft_node_initialization": {
+      "id": "raft_node_initialization",
+      "phase": "phase_6_raft_node",
+      "order": 18,
+      "title": "RaftNode Initialization",
+      "description": "Implement RaftNode::new() with RawNode creation and bootstrap mode",
+      "component": "raft/node",
+      "tdd_cycle": {
+        "test": "Write test: create RaftNode with valid config, verify fields are set",
+        "implement": "Define RaftNode struct, implement new() with raft::Config conversion",
+        "refactor": "Extract config conversion to helper"
+      },
+      "files_to_create": [
+        "crates/raft/src/node.rs"
+      ],
+      "files_to_modify": [
+        "crates/raft/src/lib.rs"
+      ],
+      "test_file": "crates/raft/tests/node_tests.rs",
+      "acceptance_criteria": [
+        "RaftNode struct with raw_node, storage, state_machine, config, node_id",
+        "new() creates MemStorage with voters from peers",
+        "Creates raft::Config with converted timing parameters",
+        "Creates RawNode with config and storage",
+        "Creates Arc<Mutex<StateMachine>>",
+        "Test verifies node created successfully"
+      ],
+      "estimated_time": "2 hours"
+    },
+
+    "raft_node_tick": {
+      "id": "raft_node_tick",
+      "phase": "phase_6_raft_node",
+      "order": 19,
+      "title": "RaftNode Tick Processing",
+      "description": "Implement tick() to drive raft-rs internal timers",
+      "component": "raft/node",
+      "tdd_cycle": {
+        "test": "Write test: call tick() multiple times, verify no panics",
+        "implement": "Implement tick() calling raw_node.tick()",
+        "refactor": "Add instrumentation logging"
+      },
+      "files_to_modify": [
+        "crates/raft/src/node.rs"
+      ],
+      "test_file": "crates/raft/tests/node_tests.rs",
+      "acceptance_criteria": [
+        "tick() calls self.raw_node.tick()",
+        "Returns Result<()>",
+        "Can be called repeatedly without errors",
+        "Test passes"
+      ],
+      "estimated_time": "30 minutes"
+    },
+
+    "raft_node_propose": {
+      "id": "raft_node_propose",
+      "phase": "phase_6_raft_node",
+      "order": 20,
+      "title": "RaftNode Propose Client Commands",
+      "description": "Implement propose() to submit client commands to Raft log",
+      "component": "raft/node",
+      "tdd_cycle": {
+        "test": "Write test: propose as follower returns NotLeader error",
+        "implement": "Implement propose() calling raw_node.propose()",
+        "refactor": "Add leader check and error handling"
+      },
+      "files_to_modify": [
+        "crates/raft/src/node.rs"
+      ],
+      "test_file": "crates/raft/tests/node_tests.rs",
+      "acceptance_criteria": [
+        "propose(data) checks is_leader()",
+        "Returns NotLeader error if follower",
+        "Calls raw_node.propose(context, data) if leader",
+        "Returns Result<()>",
+        "Test verifies NotLeader error for follower"
+      ],
+      "estimated_time": "1 hour"
+    },
+
+    "raft_node_ready_handler": {
+      "id": "raft_node_ready_handler",
+      "phase": "phase_6_raft_node",
+      "order": 21,
+      "title": "RaftNode Ready Processing",
+      "description": "Implement handle_ready() to persist, send, apply, and advance",
+      "component": "raft/node",
+      "tdd_cycle": {
+        "test": "Write test: handle_ready with no ready state returns empty",
+        "implement": "Implement full Ready processing: persist → send → apply → advance",
+        "refactor": "Extract apply logic, add comprehensive logging"
+      },
+      "files_to_modify": [
+        "crates/raft/src/node.rs"
+      ],
+      "test_file": "crates/raft/tests/node_tests.rs",
+      "acceptance_criteria": [
+        "handle_ready() checks raw_node.has_ready()",
+        "Persists hard_state and entries to storage",
+        "Extracts messages to send",
+        "Applies committed_entries to state_machine",
+        "Calls raw_node.advance(ready)",
+        "Handles light ready if present",
+        "Calls raw_node.advance_apply()",
+        "Returns Vec<Message> to send",
+        "All steps follow correct order (persist before send)",
+        "Test passes"
+      ],
+      "estimated_time": "1.5 hours"
+    },
+
+    "raft_node_leader_queries": {
+      "id": "raft_node_leader_queries",
+      "phase": "phase_6_raft_node",
+      "order": 22,
+      "title": "RaftNode Leader Queries",
+      "description": "Implement is_leader() and leader_id() query methods",
+      "component": "raft/node",
+      "tdd_cycle": {
+        "test": "Write tests: new node is not leader, leader_id returns None initially",
+        "implement": "Implement queries using raw_node.raft.state",
+        "refactor": "Add caching if needed"
+      },
+      "files_to_modify": [
+        "crates/raft/src/node.rs"
+      ],
+      "test_file": "crates/raft/tests/node_tests.rs",
+      "acceptance_criteria": [
+        "is_leader() returns self.raw_node.raft.state == StateRole::Leader",
+        "leader_id() returns Some(id) if leader is known, None otherwise",
+        "Tests verify correct values for new node",
+        "All tests pass"
+      ],
+      "estimated_time": "30 minutes"
+    },
+
+    "single_node_bootstrap": {
+      "id": "single_node_bootstrap",
+      "phase": "phase_7_integration",
+      "order": 23,
+      "title": "Single Node Bootstrap Test",
+      "description": "Integration test: bootstrap single node, verify it becomes leader",
+      "component": "raft/integration",
+      "tdd_cycle": {
+        "test": "Write integration test: create RaftNode, tick until becomes leader",
+        "implement": "Use test utilities to create node and run event loop",
+        "refactor": "Extract test helpers for reuse"
+      },
+      "files_to_create": [
+        "crates/raft/tests/integration_tests.rs",
+        "crates/raft/tests/common/mod.rs"
+      ],
+      "test_file": "crates/raft/tests/integration_tests.rs",
+      "acceptance_criteria": [
+        "Test creates RaftNode with single-node cluster config",
+        "Ticks node repeatedly (simulate time passing)",
+        "After election timeout, node becomes leader",
+        "is_leader() returns true",
+        "Test passes within reasonable time (<5s)"
+      ],
+      "estimated_time": "1 hour"
+    },
+
+    "single_node_propose_apply": {
+      "id": "single_node_propose_apply",
+      "phase": "phase_7_integration",
+      "order": 24,
+      "title": "Single Node Propose and Apply Test",
+      "description": "Integration test: propose operation, process ready, verify applied to state machine",
+      "component": "raft/integration",
+      "tdd_cycle": {
+        "test": "Write test: become leader, propose SET, handle ready, verify get() works",
+        "implement": "Propose operation, process ready in loop, check state machine",
+        "refactor": "Add async test utilities"
+      },
+      "files_to_modify": [
+        "crates/raft/tests/integration_tests.rs"
+      ],
+      "test_file": "crates/raft/tests/integration_tests.rs",
+      "acceptance_criteria": [
+        "Test sets up single-node cluster",
+        "Node becomes leader",
+        "Proposes Operation::Set { key: b\"foo\", value: b\"bar\" }",
+        "Calls handle_ready() to process and apply",
+        "state_machine.get(b\"foo\") returns Some(b\"bar\")",
+        "Test passes"
+      ],
+      "estimated_time": "1 hour"
+    }
+  },
+
+  "task_order": [
+    "common_types",
+    "common_errors",
+    "config_types",
+    "config_validation",
+    "config_defaults",
+    "protobuf_messages",
+    "operation_types",
+    "mem_storage_skeleton",
+    "mem_storage_initial_state",
+    "mem_storage_entries",
+    "mem_storage_term",
+    "mem_storage_first_last_index",
+    "mem_storage_snapshot",
+    "mem_storage_mutations",
+    "state_machine_core",
+    "state_machine_operations",
+    "state_machine_snapshot",
+    "raft_node_initialization",
+    "raft_node_tick",
+    "raft_node_propose",
+    "raft_node_ready_handler",
+    "raft_node_leader_queries",
+    "single_node_bootstrap",
+    "single_node_propose_apply"
+  ],
+
+  "total_estimated_time": "19 hours",
+
+  "success_criteria": [
+    "All unit tests pass (100% of task acceptance criteria met)",
+    "All integration tests pass (single-node bootstrap and propose/apply)",
+    "MemStorage implements all 6 Storage trait methods correctly",
+    "StateMachine applies Set and Del operations correctly",
+    "RaftNode can bootstrap and become leader",
+    "RaftNode can propose and apply operations via Ready processing",
+    "No unwrap() calls in production code paths",
+    "All public APIs have doc comments",
+    "cargo clippy passes with no warnings",
+    "cargo test passes all tests"
+  ],
+
+  "notes": [
+    "This plan focuses on Phase 1 in-memory implementation only",
+    "gRPC client/server networking is NOT included (separate feature)",
+    "Multi-node cluster tests are deferred to chaos testing phase",
+    "RocksDB persistence is NOT included in Phase 1",
+    "Each task follows strict TDD: Test → Implement → Refactor",
+    "Tasks are ordered by technical dependencies, not by crate",
+    "Estimated times include writing tests, implementation, and refactoring",
+    "Integration tests at the end verify all components work together"
+  ],
+
+  "related_documents": [
+    "/Users/martinrichards/code/seshat/docs/specs/raft/design.md",
+    "/Users/martinrichards/code/seshat/docs/specs/raft/spec.md",
+    "/Users/martinrichards/code/seshat/docs/standards/practices.md",
+    "/Users/martinrichards/code/seshat/docs/standards/tech.md",
+    "/Users/martinrichards/code/seshat/docs/architecture/data-structures.md"
+  ]
+}

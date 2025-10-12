@@ -1,0 +1,207 @@
+{
+  "product_vision": "Seshat is a distributed, Redis-compatible key-value store built in Rust for learning distributed systems fundamentals with Raft consensus",
+  "current_phase": {
+    "name": "Phase 1 MVP",
+    "goal": "Single shard cluster with 3 nodes, Raft consensus, basic Redis commands",
+    "success_criteria": [
+      "3-node cluster runs stably for 1+ hours",
+      "Leader election within 2 seconds",
+      "Pass all 11 chaos tests",
+      "Performance: >5,000 ops/sec, <10ms p99 latency"
+    ]
+  },
+  "crate_structure": {
+    "raft": {
+      "responsibility": "Wrap raft-rs with application-specific logic, implement Storage trait, handle message routing",
+      "dependencies": ["common", "storage"],
+      "location": "crates/raft/",
+      "needs": [
+        "RaftNode wrapper around raft-rs RawNode",
+        "RaftStorage implementing raft::Storage trait",
+        "StateMachine for applying committed entries",
+        "Message routing for Raft RPCs"
+      ]
+    },
+    "protocol": {
+      "responsibility": "gRPC service definitions for internal Raft messages, RESP protocol (Phase 1 focuses on gRPC)",
+      "dependencies": ["common"],
+      "location": "crates/protocol/",
+      "needs": [
+        "Protobuf definitions for AppendEntries, RequestVote, InstallSnapshot",
+        "gRPC client for sending Raft messages",
+        "gRPC server for receiving Raft messages",
+        "Connection pooling"
+      ]
+    },
+    "common": {
+      "responsibility": "Shared types, error definitions, configuration structs",
+      "dependencies": [],
+      "location": "crates/common/",
+      "existing_types": [
+        "NodeId (u64)",
+        "Term (u64)",
+        "LogIndex (u64)",
+        "Key (Vec<u8>)",
+        "Value (Vec<u8>)",
+        "Error enum with thiserror",
+        "Result<T>",
+        "NodeConfig, ClusterConfig, RaftConfig",
+        "ClusterMembership, NodeInfo, NodeState",
+        "ShardMap, ShardInfo",
+        "VersionedLogEntry, RaftHardState, SnapshotMetadata",
+        "StoredValue"
+      ]
+    },
+    "storage": {
+      "responsibility": "RocksDB persistence layer (Phase 1: use in-memory only for raft spec)",
+      "note": "For raft spec, implement simple in-memory storage using Vec/HashMap. RocksDB integration deferred to rocksdb-storage spec."
+    }
+  },
+  "tech_stack": {
+    "consensus": {
+      "library": "raft-rs 0.7+",
+      "key_points": [
+        "Use RawNode (not Raft) for message-level control",
+        "Implement Storage trait with in-memory structures",
+        "Call tick() periodically to drive timers",
+        "Process Ready: persist → send messages → apply → advance",
+        "Bootstrap cluster with initial members configuration"
+      ]
+    },
+    "rpc": {
+      "framework": "tonic 0.11+ (gRPC) + prost 0.12+ (Protobuf)",
+      "port": 7379,
+      "messages": ["AppendEntries", "RequestVote", "InstallSnapshot"],
+      "features": [
+        "HTTP/2 connection multiplexing",
+        "Streaming support for snapshots",
+        "Connection pooling per peer",
+        "Retry logic with exponential backoff"
+      ]
+    },
+    "async_runtime": {
+      "library": "tokio 1.x (full features)",
+      "usage": "All I/O operations, timers, async RPC handlers"
+    },
+    "logging": {
+      "library": "tracing + tracing-subscriber",
+      "requirements": [
+        "Structured logging for all Raft events",
+        "Log term changes, elections, log replication",
+        "Use #[instrument] for functions",
+        "JSON output for production"
+      ]
+    },
+    "serialization": {
+      "protobuf": "For gRPC messages (tonic/prost)",
+      "bincode": "For RocksDB storage (not needed in Phase 1 in-memory)"
+    },
+    "error_handling": {
+      "libraries": "thiserror (for Error enum), anyhow (for binary/main)",
+      "patterns": "All errors include context, propagate with ?"
+    }
+  },
+  "architecture_patterns": [
+    "Layered architecture: Protocol → Service → Raft → Storage",
+    "Every node is identical (no special roles)",
+    "Dependencies flow downward only",
+    "Async by default with tokio",
+    "Type safety via Rust's type system",
+    "Fail fast: validate configuration on startup"
+  ],
+  "raft_implementation_details": {
+    "storage_trait_methods": [
+      "initial_state() -> (HardState, ConfState)",
+      "entries(low, high, max_size) -> Vec<Entry>",
+      "term(index) -> u64",
+      "first_index() -> u64",
+      "last_index() -> u64",
+      "snapshot() -> Snapshot"
+    ],
+    "in_memory_storage": {
+      "log_entries": "Vec<Entry> for Raft log",
+      "hard_state": "RaftHardState struct (term, vote, commit)",
+      "conf_state": "ConfState (voters, learners)",
+      "note": "Use raft-rs MemStorage or implement simple wrapper"
+    },
+    "timing_config": {
+      "heartbeat_interval_ms": 100,
+      "election_timeout_min_ms": 500,
+      "election_timeout_max_ms": 1000,
+      "raft_rpc_timeout_secs": 5
+    },
+    "bootstrap_process": [
+      "All 3 nodes start with same initial_members config",
+      "Each creates Raft group with all members",
+      "Leader election happens automatically",
+      "Leader is elected within 2 seconds"
+    ],
+    "state_machine": {
+      "purpose": "Apply committed log entries to in-memory HashMap",
+      "operations": ["SET key value", "DEL key"],
+      "reads": "GET key (read from HashMap)",
+      "storage": "HashMap<Vec<u8>, Vec<u8>> for Phase 1"
+    }
+  },
+  "testing_requirements": {
+    "tdd_workflow": ["Write test", "Write minimal implementation", "Refactor", "Repeat"],
+    "unit_tests": [
+      "Storage trait implementation",
+      "State machine apply logic",
+      "Config validation",
+      "Message serialization/deserialization"
+    ],
+    "integration_tests": [
+      "Leader election scenarios",
+      "Log replication between nodes",
+      "Leader failure and recovery",
+      "Follower failure"
+    ],
+    "chaos_tests": [
+      "Test 1: Leader failure - new leader elected within 2s",
+      "Test 2: Follower failure - cluster continues with 2-node quorum",
+      "Test 3: Network partition (2-1 split) - majority continues, minority rejects writes"
+    ],
+    "tools": ["tokio-test for async tests", "proptest for property-based tests"]
+  },
+  "configuration": {
+    "bootstrap_mode": {
+      "node_config": "id, client_addr (0.0.0.0:6379), internal_addr (0.0.0.0:7379), data_dir",
+      "cluster_config": "bootstrap=true, initial_members=[{id, addr}], replication_factor=3",
+      "example_member": "{id: 1, addr: \"kvstore-1:7379\"}",
+      "note": "All 3 nodes have identical initial_members list"
+    },
+    "validation": [
+      "node_id > 0",
+      "initial_members includes this node's ID",
+      "At least 3 members for fault tolerance",
+      "No duplicate node IDs",
+      "replication_factor is odd"
+    ]
+  },
+  "constraints": [
+    "Must use raft-rs library (not implement Raft from scratch)",
+    "Phase 1 uses in-memory storage only (no RocksDB)",
+    "All 3 nodes participate in single Raft group",
+    "No dynamic membership changes yet (Phase 3)",
+    "No log compaction/snapshots in Phase 1 (simplified)",
+    "Focus on correctness over performance",
+    "Must pass split-brain prevention tests"
+  ],
+  "key_types_from_common": {
+    "NodeId": "u64 - unique node identifier",
+    "Term": "u64 - Raft term",
+    "LogIndex": "u64 - Raft log index",
+    "RaftHardState": "{ version: u8, term: u64, vote: Option<u64>, commit: u64 }",
+    "VersionedLogEntry": "{ version: u8, term: u64, index: u64, entry_type: EntryType, data: Vec<u8> }",
+    "ClusterMembership": "{ members: HashMap<u64, NodeInfo>, membership_version: u64 }",
+    "NodeInfo": "{ id: u64, addr: String, state: NodeState, joined_at: u64 }",
+    "Error": "enum with variants: KeyTooLarge, NotLeader, NoQuorum, etc."
+  },
+  "next_steps": [
+    "Use analyst-agent to structure requirements into proper spec format",
+    "Create technical design with architecture details",
+    "Generate implementation tasks in dependency order",
+    "Implement with TDD: test → code → refactor"
+  ]
+}

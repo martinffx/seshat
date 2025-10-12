@@ -1,0 +1,55 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/seshat",
+    "crates/raft",
+    "crates/storage",
+    "crates/protocol",
+    "crates/common",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Martin Charles Richards <your-email@example.com>"]
+license = "MIT"
+repository = "https://github.com/yourusername/seshat"
+description = "Distributed Redis-compatible KV store with Raft consensus"
+keywords = ["database", "raft", "distributed", "redis", "consensus"]
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Logging and tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+
+# Error handling
+anyhow = "1.0"
+thiserror = "1.0"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Storage
+rocksdb = "0.22"
+
+# Raft consensus
+raft = "0.7"
+raft-proto = "0.7"
+
+# gRPC for internal communication
+tonic = "0.11"
+tonic-build = "0.11"
+prost = "0.12"
+
+# Utilities
+bytes = "1.5"
+fnv = "1.0"
+
+# Testing
+proptest = "1.0"
+tokio-test = "0.4"

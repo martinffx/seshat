@@ -1,0 +1,52 @@
+{
+  "feature": "raft",
+  "raw_user_story": "As a distributed systems engineer building Seshat, I want to implement Raft consensus with in-memory storage and gRPC transport so that I can achieve fault-tolerant strong consistency across a 3-node cluster without the complexity of persistent storage.",
+  "raw_criteria": [
+    "Cluster Formation: 3-node cluster forms successfully and elects a leader within 2 seconds of startup",
+    "Log Replication: Leader successfully replicates log entries to followers and achieves majority quorum (2 out of 3 nodes)",
+    "Leader Election: When leader fails, new leader is elected within 2 seconds",
+    "Fault Tolerance: Cluster continues operating with 2-node quorum when 1 node fails",
+    "Split-Brain Prevention: Minority partitions (1 node isolated) correctly reject writes with 'no quorum' error",
+    "State Machine: Basic state machine applies committed log entries (SET/GET/DEL operations to in-memory map)",
+    "gRPC Transport: Raft messages (AppendEntries, RequestVote, InstallSnapshot) successfully transmitted between nodes via gRPC",
+    "Configuration: Raft timing parameters (heartbeat interval, election timeout) configurable via config file"
+  ],
+  "raw_rules": [
+    "Consensus Library: Must use raft-rs library (not implementing Raft from scratch)",
+    "Storage Backend: Phase 1 uses MemStorage only (raft-rs built-in or simple wrapper)",
+    "Quorum Requirements: Majority quorum (2 out of 3) required for all write operations",
+    "Transport Protocol: Must use gRPC (tonic) for inter-node Raft message exchange",
+    "Membership: All 3 nodes participate in the single Raft group (no sharding yet)",
+    "Network Addressing: Nodes identify each other using DNS names (e.g., 'kvstore-1:7379') or IP:port",
+    "Message Types: Support RequestVote, AppendEntries, and basic InstallSnapshot RPCs",
+    "Timing Constraints: Heartbeat interval 100ms, Election timeout 500-1000ms, RPC timeout 5 seconds"
+  ],
+  "raw_scope": {
+    "included": [
+      "Wrap raft-rs RawNode with application-specific RaftNode struct",
+      "Implement raft-rs Storage trait using MemStorage (in-memory HashMap/Vec)",
+      "Define gRPC service with Protobuf message types (AppendEntries, RequestVote, InstallSnapshot)",
+      "Implement gRPC client for sending Raft messages to peers",
+      "Implement gRPC server for receiving Raft messages from peers",
+      "Connection pooling and retry logic for gRPC clients",
+      "Basic state machine that applies SET/GET/DEL to in-memory HashMap",
+      "Cluster bootstrap logic (3 nodes start with same initial membership)",
+      "Configuration for node ID, bind addresses, initial members, Raft timing",
+      "Leader transfer on graceful shutdown",
+      "Structured logging for all Raft events",
+      "Unit tests for storage trait implementation",
+      "Integration tests for leader election scenarios",
+      "Chaos tests: leader failure, follower failure, network partition"
+    ],
+    "excluded": [
+      "RocksDB persistent storage (deferred to rocksdb-storage spec)",
+      "RESP protocol parser/server (deferred to resp-protocol-mvp spec)",
+      "Log compaction and snapshots (simplified for Phase 1)",
+      "Multiple Raft groups / sharding (Phase 2)",
+      "Dynamic membership changes (Phase 3)",
+      "Prometheus metrics (Phase 4)",
+      "Follower reads (Phase 4)",
+      "Advanced snapshot transfer optimization (Phase 4)"
+    ]
+  }
+}
