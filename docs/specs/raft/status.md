@@ -2,8 +2,8 @@
 
 ## Project Phase
 - **Current Phase**: 1 - MVP Consensus Layer
-- **Overall Progress**: 7/24 tasks (29.2% complete)
-- **Phase 4 Status**: 71% Complete (5/7 Storage Layer tasks)
+- **Overall Progress**: 8/24 tasks (33.3% complete)
+- **Phase 4 Status**: 86% Complete (6/7 Storage Layer tasks)
 
 ## Completed Tasks
 1. **common_types**
@@ -172,41 +172,69 @@
      - Comprehensive thread safety validation
      - Edge cases fully covered
 
+8. **mem_storage_snapshot**
+   - **ID**: `mem_storage_snapshot`
+   - **Description**: Storage: snapshot() (30 min)
+   - **Status**: ✅ Completed
+   - **Timestamp**: 2025-10-12T20:15:00Z
+   - **Files**:
+     - Updated: `crates/raft/src/storage.rs`
+   - **Test Coverage**: 70/70 tests passing (63 original + 7 new)
+   - **Implementation Details**:
+     - Implemented snapshot() method returning current snapshot
+     - Phase 1 simplified: ignores request_index parameter
+     - Returns cloned snapshot to prevent mutation leaks
+     - Thread-safe with RwLock read access
+     - Comprehensive documentation with Phase 1 simplification note
+   - **Tests Added**:
+     - test_snapshot_returns_default_on_new_storage
+     - test_snapshot_returns_stored_snapshot
+     - test_snapshot_ignores_request_index_in_phase_1
+     - test_snapshot_with_metadata (complex ConfState)
+     - test_snapshot_with_data (10KB data)
+     - test_snapshot_returns_cloned_data
+     - test_snapshot_is_thread_safe (10 threads, 100 iterations each)
+   - **Key Features**:
+     - Simple read-lock-clone-return pattern
+     - Phase 1 implementation documented for future enhancement
+     - Validates snapshot data integrity (metadata + data)
+     - Thread-safe with 1000 total concurrent reads tested
+     - Verifies data cloning prevents mutation leaks
+
 ## Next Task (Recommended)
-- **ID**: `mem_storage_snapshot`
-- **Description**: Storage: snapshot() (30 min)
+- **ID**: `mem_storage_mutations`
+- **Description**: Storage: apply_snapshot(), wl_append_entries() (1 hour)
 - **Phase**: 4 (Storage Layer)
-- **Estimated Time**: 30 min
-- **Rationale**: Continue Storage Layer critical path - only 2 tasks remaining before completion
-- **Dependencies**: `mem_storage_skeleton`, `mem_storage_initial_state`
+- **Estimated Time**: 1 hour
+- **Rationale**: Complete Storage Layer - last task before moving to Raft Node implementation
+- **Dependencies**: All previous Storage Layer tasks
 - **Acceptance Criteria**:
-  - snapshot(request_index) returns current snapshot
-  - Phase 1 simplified: just return stored snapshot
-  - SnapshotTemporarilyUnavailable if not ready (Phase 2+)
-  - Thread-safe with RwLock read access
-  - Comprehensive tests for empty snapshot and after create_snapshot()
+  - apply_snapshot() replaces storage state with snapshot
+  - wl_append_entries() appends entries with proper truncation
+  - Thread-safe with write lock usage
+  - Comprehensive tests for all mutation operations
 
 ## Alternative Next Tasks
-1. **mem_storage_mutations** - Finalize Storage Layer (1 hour)
-2. **config_types** - Quick win: Start Configuration phase (3 tasks, 2.5 hours)
-3. **protobuf_messages** - Enable State Machine track (Phases 3 & 5)
+1. **config_types** - Quick win: Start Configuration phase (3 tasks, 2.5 hours)
+2. **protobuf_messages** - Enable State Machine track (Phases 3 & 5)
+3. **node_skeleton** - Begin Raft Node implementation (Phase 6)
 
 ## Blockers
 - None
 
 ## Progress Metrics
-- Tasks Completed: 7
-- Tasks Remaining: 17
-- Completion Percentage: 29.2%
-- Storage Layer Progress: 5/7 tasks (71%)
+- Tasks Completed: 8
+- Tasks Remaining: 16
+- Completion Percentage: 33.3%
+- Storage Layer Progress: 6/7 tasks (86%)
 - Phase 1 (Common Foundation): ✅ 100% (2/2)
-- Phase 4 (Storage Layer): 🚧 71% (5/7)
+- Phase 4 (Storage Layer): 🚧 86% (6/7)
 
 ## Task Breakdown
 - Total Tasks: 24
-- Completed: 7
+- Completed: 8
 - In Progress: 0
-- Not Started: 17
+- Not Started: 16
 
 ## Recent Updates
 - Completed common type aliases
@@ -228,46 +256,49 @@
   - StorageError::Unavailable for unavailable indices
   - 11 new tests covering all edge cases, boundaries, thread safety
   - 100% test coverage of all code paths
-- **NEW**: Completed first_index() and last_index() test coverage
+- Completed first_index() and last_index() test coverage
   - 16 new tests covering all scenarios
   - Verified invariant: first_index <= last_index + 1
   - Comprehensive thread safety validation
   - Edge cases: empty log, after append, after compaction, after snapshot
-  - Storage Layer now 71% complete (5/7 tasks)
-  - Total 63 tests passing
+- **NEW**: Completed snapshot() method implementation
+  - 7 new tests covering all use cases
+  - Phase 1 simplified implementation (ignores request_index)
+  - Returns cloned snapshot data to prevent mutations
+  - Thread-safe with 10 threads × 100 iterations = 1000 concurrent reads
+  - Validates metadata (index, term, ConfState) and data integrity
+  - Storage Layer now 86% complete (6/7 tasks)
+  - Total 70 tests passing
 
 ## Next Steps
-Continue Storage Layer (Critical Path):
-
-**Recommended Next Task**:
-```bash
-/spec:implement raft mem_storage_snapshot
-```
-- Implement snapshot() method (30 min)
-- Quick task to maintain momentum
-- Only 2 Storage Layer tasks remaining after this
-- Storage Layer will be 86% complete
-
-**Alternative Tracks**:
-
-**Track A (Finish Storage)**:
+**Final Storage Layer Task**:
 ```bash
 /spec:implement raft mem_storage_mutations
 ```
 - Complete Storage Layer with mutation methods (1 hour)
+- Implements apply_snapshot() and wl_append_entries()
 - Enables Raft Node implementation (Phase 6)
+- Storage Layer will be 100% complete
 
-**Track B (Quick Win)**:
+**Alternative Tracks**:
+
+**Track A (Quick Win)**:
 ```bash
 /spec:implement raft config_types
 ```
 - Complete Configuration phase quickly (3 tasks, 2.5 hours)
 
-**Track C (Enable State Machine)**:
+**Track B (Enable State Machine)**:
 ```bash
 /spec:implement raft protobuf_messages
 ```
 - Start Protocol + State Machine track (5 tasks, 5 hours)
+
+**Track C (Begin Raft Node)**:
+```bash
+/spec:implement raft node_skeleton
+```
+- Start Raft Node implementation (requires complete Storage Layer)
 
 ## TDD Quality Metrics
 All implemented tasks follow strict TDD:
@@ -281,6 +312,6 @@ All implemented tasks follow strict TDD:
 - ✅ Comprehensive doc comments
 - ✅ Edge cases covered
 
-**Average Test Count per Task**: ~11 tests
-**Total Tests**: 63 tests passing
+**Average Test Count per Task**: ~9 tests
+**Total Tests**: 70 tests passing
 **Test Success Rate**: 100%

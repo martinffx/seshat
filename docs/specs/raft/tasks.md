@@ -186,7 +186,7 @@ At current velocity (2.8 tasks/hour):
   - **Files**: `crates/raft/src/storage.rs`
   - **Acceptance**: first_index() returns snapshot.metadata.index+1 (or 1 if no snapshot); last_index() returns last entry index (or snapshot.metadata.index if empty); invariant maintained
 
-- [ ] **mem_storage_snapshot** - Storage: snapshot() (30 min)
+- [x] **mem_storage_snapshot** - Storage: snapshot() (30 min)
   - **Test**: Empty snapshot, after create_snapshot()
   - **Implement**: Implement snapshot() reading from RwLock
   - **Refactor**: Handle snapshot not ready cases

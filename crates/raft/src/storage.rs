@@ -425,6 +425,53 @@ impl MemStorage {
         }
     }
 
+    /// Returns the current snapshot.
+    ///
+    /// In Phase 1, this is simplified to always return the stored snapshot
+    /// regardless of the `request_index` parameter. In later phases, this
+    /// would check if the snapshot is ready for the given index.
+    ///
+    /// # Arguments
+    ///
+    /// * `request_index` - The index for which a snapshot is requested (unused in Phase 1)
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Result` containing:
+    /// - `Ok(Snapshot)` - A clone of the current snapshot
+    ///
+    /// # Phase 1 Simplification
+    ///
+    /// This implementation ignores `request_index` and always returns the current
+    /// snapshot. Future phases may return `StorageError::SnapshotTemporarilyUnavailable`
+    /// if a snapshot is being created for a specific index.
+    ///
+    /// # Thread Safety
+    ///
+    /// This method acquires a read lock on the snapshot field. Multiple concurrent
+    /// calls are safe and efficient.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use seshat_raft::MemStorage;
+    /// use raft::eraftpb::Snapshot;
+    ///
+    /// let storage = MemStorage::new();
+    ///
+    /// // Empty storage returns default snapshot
+    /// let snapshot = storage.snapshot(0).unwrap();
+    /// assert_eq!(snapshot.get_metadata().index, 0);
+    /// assert_eq!(snapshot.get_metadata().term, 0);
+    /// assert!(snapshot.data.is_empty());
+    /// ```
+    pub fn snapshot(&self, _request_index: u64) -> raft::Result<Snapshot> {
+        // Phase 1: Simplified implementation
+        // Just return the current snapshot, ignoring request_index
+        let snapshot = self.snapshot.read().unwrap();
+        Ok(snapshot.clone())
+    }
+
     /// Appends entries to the log.
     ///
     /// This is a helper method for testing. In production use, entries are
@@ -1585,7 +1632,11 @@ mod tests {
         assert_eq!(storage.term(0).unwrap(), 0, "Index 0 returns 0");
 
         // Snapshot index should return snapshot term
-        assert_eq!(storage.term(10).unwrap(), 5, "Snapshot index returns snapshot term");
+        assert_eq!(
+            storage.term(10).unwrap(),
+            5,
+            "Snapshot index returns snapshot term"
+        );
 
         // Indices before snapshot should be compacted
         let result = storage.term(9);
@@ -1599,7 +1650,10 @@ mod tests {
 
         // Indices after snapshot should be unavailable
         let result = storage.term(11);
-        assert!(result.is_err(), "Index after snapshot should be unavailable");
+        assert!(
+            result.is_err(),
+            "Index after snapshot should be unavailable"
+        );
         match result.unwrap_err() {
             raft::Error::Store(StorageError::Unavailable) => {
                 // Expected
@@ -1619,11 +1673,7 @@ mod tests {
         // Empty log should return 1 as the default first index
         let result = storage.first_index();
         assert!(result.is_ok(), "first_index should succeed on empty log");
-        assert_eq!(
-            result.unwrap(),
-            1,
-            "Empty log should have first_index = 1"
-        );
+        assert_eq!(result.unwrap(), 1, "Empty log should have first_index = 1");
     }
 
     #[test]
@@ -1746,7 +1796,10 @@ mod tests {
         storage.append(&entries);
 
         let result = storage.first_index();
-        assert!(result.is_ok(), "first_index should succeed after compaction");
+        assert!(
+            result.is_ok(),
+            "first_index should succeed after compaction"
+        );
         assert_eq!(
             result.unwrap(),
             51,
@@ -1843,7 +1896,10 @@ mod tests {
 
         // With no entries, last_index should return snapshot.index
         let result = storage.last_index();
-        assert!(result.is_ok(), "last_index should succeed with snapshot only");
+        assert!(
+            result.is_ok(),
+            "last_index should succeed with snapshot only"
+        );
         assert_eq!(
             result.unwrap(),
             10,
@@ -1956,8 +2012,15 @@ mod tests {
         storage.append(&entries);
 
         let result = storage.last_index();
-        assert!(result.is_ok(), "last_index should succeed with single entry");
-        assert_eq!(result.unwrap(), 1, "last_index should be 1 for single entry");
+        assert!(
+            result.is_ok(),
+            "last_index should succeed with single entry"
+        );
+        assert_eq!(
+            result.unwrap(),
+            1,
+            "last_index should be 1 for single entry"
+        );
     }
 
     // ============================================================================
@@ -2263,5 +2326,219 @@ mod tests {
         ]);
         assert_eq!(storage.first_index().unwrap(), 4);
         assert_eq!(storage.last_index().unwrap(), 7);
+    }
+
+    // ============================================================================
+    // Tests for snapshot() method
+    // ============================================================================
+
+    #[test]
+    fn test_snapshot_returns_default_on_new_storage() {
+        let storage = MemStorage::new();
+
+        // Empty storage should return default snapshot
+        let result = storage.snapshot(0);
+        assert!(result.is_ok(), "snapshot() should succeed on new storage");
+
+        let snapshot = result.unwrap();
+        assert_eq!(
+            snapshot.get_metadata().index,
+            0,
+            "Default snapshot should have index 0"
+        );
+        assert_eq!(
+            snapshot.get_metadata().term,
+            0,
+            "Default snapshot should have term 0"
+        );
+        assert!(
+            snapshot.data.is_empty(),
+            "Default snapshot should have empty data"
+        );
+    }
+
+    #[test]
+    fn test_snapshot_returns_stored_snapshot() {
+        let storage = MemStorage::new();
+
+        // Create and store a snapshot
+        let mut snap = Snapshot::default();
+        snap.mut_metadata().index = 10;
+        snap.mut_metadata().term = 3;
+        snap.data = vec![1, 2, 3, 4, 5];
+        *storage.snapshot.write().unwrap() = snap;
+
+        // Retrieve snapshot
+        let result = storage.snapshot(0);
+        assert!(result.is_ok(), "snapshot() should succeed");
+
+        let retrieved = result.unwrap();
+        assert_eq!(
+            retrieved.get_metadata().index,
+            10,
+            "Should return stored snapshot index"
+        );
+        assert_eq!(
+            retrieved.get_metadata().term,
+            3,
+            "Should return stored snapshot term"
+        );
+        assert_eq!(
+            retrieved.data,
+            vec![1, 2, 3, 4, 5],
+            "Should return stored snapshot data"
+        );
+    }
+
+    #[test]
+    fn test_snapshot_ignores_request_index_in_phase_1() {
+        let storage = MemStorage::new();
+
+        // Store a snapshot at index 10
+        let mut snap = Snapshot::default();
+        snap.mut_metadata().index = 10;
+        snap.mut_metadata().term = 3;
+        *storage.snapshot.write().unwrap() = snap;
+
+        // Request snapshot with different request_index values
+        // In Phase 1, all should return the same snapshot
+        let snap0 = storage.snapshot(0).unwrap();
+        let snap5 = storage.snapshot(5).unwrap();
+        let snap10 = storage.snapshot(10).unwrap();
+        let snap100 = storage.snapshot(100).unwrap();
+
+        // All should be identical
+        assert_eq!(snap0.get_metadata().index, 10);
+        assert_eq!(snap5.get_metadata().index, 10);
+        assert_eq!(snap10.get_metadata().index, 10);
+        assert_eq!(snap100.get_metadata().index, 10);
+    }
+
+    #[test]
+    fn test_snapshot_with_metadata() {
+        let storage = MemStorage::new();
+
+        // Create snapshot with complex metadata
+        let mut snap = Snapshot::default();
+        snap.mut_metadata().index = 42;
+        snap.mut_metadata().term = 7;
+
+        // Set configuration in metadata
+        snap.mut_metadata().conf_state = Some(ConfState {
+            voters: vec![1, 2, 3],
+            learners: vec![4, 5],
+            ..Default::default()
+        });
+
+        *storage.snapshot.write().unwrap() = snap;
+
+        // Retrieve and verify
+        let retrieved = storage.snapshot(0).unwrap();
+        assert_eq!(retrieved.get_metadata().index, 42);
+        assert_eq!(retrieved.get_metadata().term, 7);
+        assert_eq!(retrieved.get_metadata().conf_state.as_ref().unwrap().voters, vec![1, 2, 3]);
+        assert_eq!(retrieved.get_metadata().conf_state.as_ref().unwrap().learners, vec![4, 5]);
+    }
+
+    #[test]
+    fn test_snapshot_with_data() {
+        let storage = MemStorage::new();
+
+        // Create snapshot with substantial data
+        let mut snap = Snapshot::default();
+        snap.mut_metadata().index = 100;
+        snap.mut_metadata().term = 10;
+        snap.data = vec![0; 10_000]; // 10KB of data
+        *storage.snapshot.write().unwrap() = snap;
+
+        // Retrieve and verify
+        let retrieved = storage.snapshot(0).unwrap();
+        assert_eq!(retrieved.get_metadata().index, 100);
+        assert_eq!(retrieved.get_metadata().term, 10);
+        assert_eq!(retrieved.data.len(), 10_000);
+        assert!(retrieved.data.iter().all(|&b| b == 0));
+    }
+
+    #[test]
+    fn test_snapshot_returns_cloned_data() {
+        let storage = MemStorage::new();
+
+        // Store initial snapshot
+        let mut snap = Snapshot::default();
+        snap.mut_metadata().index = 5;
+        snap.mut_metadata().term = 2;
+        snap.data = vec![1, 2, 3];
+        *storage.snapshot.write().unwrap() = snap;
+
+        // Get first snapshot
+        let snap1 = storage.snapshot(0).unwrap();
+
+        // Modify storage snapshot
+        let mut new_snap = Snapshot::default();
+        new_snap.mut_metadata().index = 10;
+        new_snap.mut_metadata().term = 5;
+        new_snap.data = vec![4, 5, 6];
+        *storage.snapshot.write().unwrap() = new_snap;
+
+        // Get second snapshot
+        let snap2 = storage.snapshot(0).unwrap();
+
+        // Verify snap1 is unaffected by later changes
+        assert_eq!(snap1.get_metadata().index, 5, "First snapshot should be unaffected");
+        assert_eq!(snap1.get_metadata().term, 2, "First snapshot term should be unaffected");
+        assert_eq!(snap1.data, vec![1, 2, 3], "First snapshot data should be unaffected");
+
+        // Verify snap2 has new values
+        assert_eq!(snap2.get_metadata().index, 10, "Second snapshot should have new values");
+        assert_eq!(snap2.get_metadata().term, 5, "Second snapshot should have new term");
+        assert_eq!(snap2.data, vec![4, 5, 6], "Second snapshot should have new data");
+    }
+
+    #[test]
+    fn test_snapshot_is_thread_safe() {
+        let storage = Arc::new(MemStorage::new());
+
+        // Store a snapshot
+        let mut snap = Snapshot::default();
+        snap.mut_metadata().index = 20;
+        snap.mut_metadata().term = 4;
+        snap.data = vec![10, 20, 30, 40, 50];
+        *storage.snapshot.write().unwrap() = snap;
+
+        // Spawn multiple threads reading snapshot concurrently
+        let handles: Vec<_> = (0..10)
+            .map(|_| {
+                let storage_clone = Arc::clone(&storage);
+                thread::spawn(move || {
+                    // Each thread reads the snapshot 100 times
+                    for request_idx in 0..100 {
+                        let result = storage_clone.snapshot(request_idx);
+                        assert!(result.is_ok(), "snapshot() should succeed");
+
+                        let snapshot = result.unwrap();
+                        assert_eq!(
+                            snapshot.get_metadata().index,
+                            20,
+                            "Snapshot index should be consistent"
+                        );
+                        assert_eq!(
+                            snapshot.get_metadata().term,
+                            4,
+                            "Snapshot term should be consistent"
+                        );
+                        assert_eq!(
+                            snapshot.data,
+                            vec![10, 20, 30, 40, 50],
+                            "Snapshot data should be consistent"
+                        );
+                    }
+                })
+            })
+            .collect();
+
+        // Wait for all threads to complete
+        for handle in handles {
+            handle.join().expect("Thread should not panic");
+        }
     }
 }
