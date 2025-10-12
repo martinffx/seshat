@@ -1,3 +1,7 @@
+<div align="center">
+  <img src="Seshat.svg" alt="Seshat Logo" width="200"/>
+</div>
+
 # Seshat
 
 > *"She Who Is The Scribe"* - Egyptian goddess of wisdom, knowledge, and writing
