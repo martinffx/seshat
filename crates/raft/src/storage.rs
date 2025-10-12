@@ -276,6 +276,95 @@ impl MemStorage {
         Ok(result)
     }
 
+    /// Returns the term of the entry at the given index.
+    ///
+    /// # Arguments
+    ///
+    /// * `index` - The log index to query
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Result` containing:
+    /// - `Ok(term)` - The term of the entry at the given index
+    /// - `Err(StorageError::Compacted)` - If the index has been compacted
+    /// - `Err(StorageError::Unavailable)` - If the index is not yet available
+    ///
+    /// # Special Cases
+    ///
+    /// - `term(0)` always returns `0` (by Raft convention)
+    /// - If `index == snapshot.metadata.index`, returns `snapshot.metadata.term`
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use seshat_raft::MemStorage;
+    /// use raft::eraftpb::Entry;
+    ///
+    /// let storage = MemStorage::new();
+    ///
+    /// // Index 0 always returns term 0
+    /// assert_eq!(storage.term(0).unwrap(), 0);
+    ///
+    /// // Add entries and query their terms
+    /// let entries = vec![
+    ///     Entry { index: 1, term: 1, ..Default::default() },
+    ///     Entry { index: 2, term: 2, ..Default::default() },
+    /// ];
+    /// storage.append(&entries);
+    /// assert_eq!(storage.term(1).unwrap(), 1);
+    /// assert_eq!(storage.term(2).unwrap(), 2);
+    /// ```
+    pub fn term(&self, index: u64) -> raft::Result<u64> {
+        // Special case: index 0 always has term 0
+        if index == 0 {
+            return Ok(0);
+        }
+
+        // Get bounds
+        let first = self.first_index()?;
+        let last = self.last_index()?;
+
+        // Check if index is before first available entry (compacted)
+        if index < first {
+            // Special case: check if this is the snapshot index
+            let snapshot = self.snapshot.read().unwrap();
+            if index == snapshot.get_metadata().index {
+                return Ok(snapshot.get_metadata().term);
+            }
+            return Err(raft::Error::Store(StorageError::Compacted));
+        }
+
+        // Check if index is beyond available entries
+        if index > last {
+            return Err(raft::Error::Store(StorageError::Unavailable));
+        }
+
+        // Check if this is exactly the snapshot index
+        let snapshot = self.snapshot.read().unwrap();
+        if index == snapshot.get_metadata().index {
+            return Ok(snapshot.get_metadata().term);
+        }
+
+        // Get the entry from the log
+        let entries = self.entries.read().unwrap();
+
+        // Handle empty log (shouldn't happen given bounds checks, but be safe)
+        if entries.is_empty() {
+            return Err(raft::Error::Store(StorageError::Unavailable));
+        }
+
+        // Calculate offset
+        let offset = entries[0].index;
+        let vec_index = (index - offset) as usize;
+
+        // Bounds check
+        if vec_index >= entries.len() {
+            return Err(raft::Error::Store(StorageError::Unavailable));
+        }
+
+        Ok(entries[vec_index].term)
+    }
+
     /// Returns the first index in the log.
     ///
     /// This is the index of the first entry available in the log. After log compaction,
@@ -1216,6 +1305,306 @@ mod tests {
 
         for handle in handles {
             handle.join().expect("Thread should not panic");
+        }
+    }
+
+    // ============================================================================
+    // Tests for term() method
+    // ============================================================================
+
+    #[test]
+    fn test_term_index_zero_returns_zero() {
+        let storage = MemStorage::new();
+
+        // Index 0 should always return term 0
+        let result = storage.term(0);
+        assert!(result.is_ok(), "term(0) should succeed");
+        assert_eq!(result.unwrap(), 0, "term(0) should return 0");
+    }
+
+    #[test]
+    fn test_term_for_valid_indices_in_log() {
+        let storage = MemStorage::new();
+
+        // Add entries with different terms
+        let entries = vec![
+            Entry {
+                index: 1,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 2,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 3,
+                term: 2,
+                ..Default::default()
+            },
+            Entry {
+                index: 4,
+                term: 3,
+                ..Default::default()
+            },
+            Entry {
+                index: 5,
+                term: 3,
+                ..Default::default()
+            },
+        ];
+        storage.append(&entries);
+
+        // Test term for each entry
+        assert_eq!(storage.term(1).unwrap(), 1, "Entry 1 should have term 1");
+        assert_eq!(storage.term(2).unwrap(), 1, "Entry 2 should have term 1");
+        assert_eq!(storage.term(3).unwrap(), 2, "Entry 3 should have term 2");
+        assert_eq!(storage.term(4).unwrap(), 3, "Entry 4 should have term 3");
+        assert_eq!(storage.term(5).unwrap(), 3, "Entry 5 should have term 3");
+    }
+
+    #[test]
+    fn test_term_for_snapshot_index() {
+        let storage = MemStorage::new();
+
+        // Create a snapshot at index 5 with term 2
+        let mut snapshot = Snapshot::default();
+        snapshot.mut_metadata().index = 5;
+        snapshot.mut_metadata().term = 2;
+        *storage.snapshot.write().unwrap() = snapshot;
+
+        // Add entries starting from index 6
+        let entries = vec![
+            Entry {
+                index: 6,
+                term: 2,
+                ..Default::default()
+            },
+            Entry {
+                index: 7,
+                term: 3,
+                ..Default::default()
+            },
+        ];
+        storage.append(&entries);
+
+        // Query term for snapshot index should return snapshot term
+        let result = storage.term(5);
+        assert!(result.is_ok(), "term(snapshot_index) should succeed");
+        assert_eq!(result.unwrap(), 2, "Should return snapshot term");
+    }
+
+    #[test]
+    fn test_term_error_for_compacted_index() {
+        let storage = MemStorage::new();
+
+        // Create a snapshot at index 5
+        let mut snapshot = Snapshot::default();
+        snapshot.mut_metadata().index = 5;
+        snapshot.mut_metadata().term = 2;
+        *storage.snapshot.write().unwrap() = snapshot;
+
+        // Add entries starting from index 6
+        let entries = vec![
+            Entry {
+                index: 6,
+                term: 2,
+                ..Default::default()
+            },
+            Entry {
+                index: 7,
+                term: 3,
+                ..Default::default()
+            },
+        ];
+        storage.append(&entries);
+
+        // first_index() should be 6 (snapshot.index + 1)
+        // Requesting term for index before that should fail
+        let result = storage.term(4);
+        assert!(result.is_err(), "Should error for compacted index");
+
+        match result.unwrap_err() {
+            raft::Error::Store(StorageError::Compacted) => {
+                // Expected error
+            }
+            other => panic!("Expected StorageError::Compacted, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_term_error_for_unavailable_index() {
+        let storage = MemStorage::new();
+
+        let entries = vec![
+            Entry {
+                index: 1,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 2,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 3,
+                term: 2,
+                ..Default::default()
+            },
+        ];
+        storage.append(&entries);
+
+        // last_index() is 3
+        // Requesting term for index > 3 should fail
+        let result = storage.term(4);
+        assert!(result.is_err(), "Should error for unavailable index");
+
+        match result.unwrap_err() {
+            raft::Error::Store(StorageError::Unavailable) => {
+                // Expected error
+            }
+            other => panic!("Expected StorageError::Unavailable, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_term_on_empty_storage() {
+        let storage = MemStorage::new();
+
+        // Index 0 should work
+        assert_eq!(storage.term(0).unwrap(), 0, "term(0) should return 0");
+
+        // Any positive index should fail with Unavailable
+        let result = storage.term(1);
+        assert!(result.is_err(), "Should error for index beyond empty log");
+
+        match result.unwrap_err() {
+            raft::Error::Store(StorageError::Unavailable) => {
+                // Expected
+            }
+            other => panic!("Expected StorageError::Unavailable, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_term_thread_safety() {
+        let storage = Arc::new(MemStorage::new());
+
+        // Populate storage
+        let entries = vec![
+            Entry {
+                index: 1,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 2,
+                term: 2,
+                ..Default::default()
+            },
+            Entry {
+                index: 3,
+                term: 2,
+                ..Default::default()
+            },
+            Entry {
+                index: 4,
+                term: 3,
+                ..Default::default()
+            },
+            Entry {
+                index: 5,
+                term: 3,
+                ..Default::default()
+            },
+        ];
+        storage.append(&entries);
+
+        // Spawn multiple threads reading terms concurrently
+        let handles: Vec<_> = (0..10)
+            .map(|_| {
+                let storage_clone = Arc::clone(&storage);
+                thread::spawn(move || {
+                    assert_eq!(storage_clone.term(0).unwrap(), 0);
+                    assert_eq!(storage_clone.term(1).unwrap(), 1);
+                    assert_eq!(storage_clone.term(2).unwrap(), 2);
+                    assert_eq!(storage_clone.term(3).unwrap(), 2);
+                    assert_eq!(storage_clone.term(4).unwrap(), 3);
+                    assert_eq!(storage_clone.term(5).unwrap(), 3);
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().expect("Thread should not panic");
+        }
+    }
+
+    #[test]
+    fn test_term_boundary_conditions() {
+        let storage = MemStorage::new();
+
+        // Add a single entry
+        let entries = vec![Entry {
+            index: 1,
+            term: 5,
+            ..Default::default()
+        }];
+        storage.append(&entries);
+
+        // Test boundaries
+        assert_eq!(storage.term(0).unwrap(), 0, "Index 0 returns 0");
+        assert_eq!(storage.term(1).unwrap(), 5, "Index 1 returns correct term");
+
+        // Index 2 should be unavailable
+        let result = storage.term(2);
+        assert!(result.is_err(), "Index beyond last should error");
+        match result.unwrap_err() {
+            raft::Error::Store(StorageError::Unavailable) => {
+                // Expected
+            }
+            other => panic!("Expected StorageError::Unavailable, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_term_with_snapshot_but_no_entries() {
+        let storage = MemStorage::new();
+
+        // Create a snapshot at index 10 with term 5
+        let mut snapshot = Snapshot::default();
+        snapshot.mut_metadata().index = 10;
+        snapshot.mut_metadata().term = 5;
+        *storage.snapshot.write().unwrap() = snapshot;
+
+        // No entries added, only snapshot exists
+
+        // Index 0 should work
+        assert_eq!(storage.term(0).unwrap(), 0, "Index 0 returns 0");
+
+        // Snapshot index should return snapshot term
+        assert_eq!(storage.term(10).unwrap(), 5, "Snapshot index returns snapshot term");
+
+        // Indices before snapshot should be compacted
+        let result = storage.term(9);
+        assert!(result.is_err(), "Index before snapshot should be compacted");
+        match result.unwrap_err() {
+            raft::Error::Store(StorageError::Compacted) => {
+                // Expected
+            }
+            other => panic!("Expected StorageError::Compacted, got {:?}", other),
+        }
+
+        // Indices after snapshot should be unavailable
+        let result = storage.term(11);
+        assert!(result.is_err(), "Index after snapshot should be unavailable");
+        match result.unwrap_err() {
+            raft::Error::Store(StorageError::Unavailable) => {
+                // Expected
+            }
+            other => panic!("Expected StorageError::Unavailable, got {:?}", other),
         }
     }
 }

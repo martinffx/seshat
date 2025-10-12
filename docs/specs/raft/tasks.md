@@ -172,7 +172,7 @@ At current velocity (2 tasks/hour):
   - **Files**: `crates/raft/src/storage.rs`
   - **Acceptance**: entries(low, high, None) returns [low, high) range; entries(low, high, Some(max_size)) respects size limit; StorageError::Compacted if low < first_index(); StorageError::Unavailable if high > last_index()+1
 
-- [ ] **mem_storage_term** - Storage: term() (30 min)
+- [x] **mem_storage_term** - Storage: term() (30 min)
   - **Test**: Term for valid index, index=0, compacted index, unavailable index
   - **Implement**: Implement term() with snapshot fallback
   - **Refactor**: Add bounds checking
