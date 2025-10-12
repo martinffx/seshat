@@ -41,6 +41,7 @@ cargo run -p seshat -- --config config/node1.toml
 
 # Run 3-node cluster (Docker Compose)
 docker-compose up
+```
 
 ## Documentation
 
