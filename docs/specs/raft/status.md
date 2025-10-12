@@ -2,8 +2,8 @@
 
 ## Project Phase
 - **Current Phase**: 1 - MVP Consensus Layer
-- **Overall Progress**: 4/24 tasks (16.7% complete)
-- **Phase 4 Status**: 29% Complete (2/7 Storage Layer tasks)
+- **Overall Progress**: 5/24 tasks (20.8% complete)
+- **Phase 4 Status**: 43% Complete (3/7 Storage Layer tasks)
 
 ## Completed Tasks
 1. **common_types**
@@ -72,21 +72,52 @@
      - test_initial_state_with_complex_conf_state
      - Edge cases for configuration changes and joint consensus
 
+5. **mem_storage_entries**
+   - **ID**: `mem_storage_entries`
+   - **Description**: Storage: entries() (1 hour)
+   - **Status**: ✅ Completed
+   - **Timestamp**: 2025-10-12T18:45:00Z
+   - **Files**:
+     - Updated: `crates/raft/src/storage.rs`
+     - Updated: `crates/raft/Cargo.toml` (added prost = "0.11")
+   - **Test Coverage**: 36/36 tests passing (24 original + 12 new)
+   - **Implementation Details**:
+     - Implemented entries() method with range queries [low, high)
+     - Size-limited queries using prost::Message::encoded_len()
+     - Proper bounds checking with first_index() and last_index()
+     - Returns at least one entry even if it exceeds max_size (Raft protocol requirement)
+     - Thread-safe with RwLock read access
+     - Helper methods: first_index(), last_index(), append()
+   - **Tests Added**:
+     - test_entries_empty_range_returns_empty_vec
+     - test_entries_empty_range_on_populated_storage
+     - test_entries_normal_range_returns_correct_entries
+     - test_entries_single_entry_range
+     - test_entries_full_range
+     - test_entries_with_max_size_returns_partial_results
+     - test_entries_with_max_size_returns_at_least_one_entry
+     - test_entries_error_when_low_less_than_first_index (Compacted error)
+     - test_entries_error_when_high_greater_than_last_index_plus_one (Unavailable error)
+     - test_entries_boundary_at_last_index_plus_one
+     - test_entries_on_empty_storage
+     - test_entries_thread_safe (10 threads, 100 iterations)
+
 ## Next Task (Recommended)
-- **ID**: `mem_storage_entries`
-- **Description**: Storage: entries() (1 hour)
+- **ID**: `mem_storage_term`
+- **Description**: Storage: term() (30 min)
 - **Phase**: 4 (Storage Layer)
-- **Estimated Time**: 1 hour
-- **Rationale**: Continue Storage Layer critical path - implement log entry retrieval
-- **Dependencies**: `mem_storage_skeleton`, `mem_storage_initial_state`
+- **Estimated Time**: 30 min
+- **Rationale**: Continue Storage Layer critical path - implement term lookup with snapshot fallback
+- **Dependencies**: `mem_storage_skeleton`, `mem_storage_entries`
 - **Acceptance Criteria**:
-  - entries(low, high, None) returns [low, high) range
-  - entries(low, high, Some(max_size)) respects size limit
-  - StorageError::Compacted if low < first_index()
-  - StorageError::Unavailable if high > last_index()+1
+  - term(0) returns 0
+  - term(index) returns entry.term for valid index
+  - returns snapshot.metadata.term if index == snapshot.metadata.index
+  - StorageError::Compacted for compacted indices
+  - StorageError::Unavailable for unavailable indices
 
 ## Alternative Next Tasks
-1. **mem_storage_term** - Continue Storage Layer (30 min)
+1. **mem_storage_first_last_index** - Continue Storage Layer (30 min)
 2. **config_types** - Quick win: Start Configuration phase (3 tasks, 2.5 hours)
 3. **protobuf_messages** - Enable State Machine track (Phases 3 & 5)
 
@@ -94,18 +125,18 @@
 - None
 
 ## Progress Metrics
-- Tasks Completed: 4
-- Tasks Remaining: 20
-- Completion Percentage: 16.7%
-- Storage Layer Progress: 2/7 tasks (29%)
+- Tasks Completed: 5
+- Tasks Remaining: 19
+- Completion Percentage: 20.8%
+- Storage Layer Progress: 3/7 tasks (43%)
 - Phase 1 (Common Foundation): ✅ 100% (2/2)
-- Phase 4 (Storage Layer): 29% (2/7)
+- Phase 4 (Storage Layer): 🚧 43% (3/7)
 
 ## Task Breakdown
 - Total Tasks: 24
-- Completed: 4
+- Completed: 5
 - In Progress: 0
-- Not Started: 20
+- Not Started: 19
 
 ## Recent Updates
 - Completed common type aliases
@@ -113,30 +144,33 @@
 - Defined error types for Raft implementation
 - Phase 1 (Common Foundation) fully completed
 - Created MemStorage skeleton with thread-safe RwLock fields
-- **NEW**: Implemented initial_state() method with comprehensive tests
-  - Returns RaftState with current HardState and ConfState
-  - Thread-safe concurrent access with read locks
-  - Added setter methods for test support
-  - 11 new tests covering defaults, mutations, thread safety, and edge cases
+- Implemented initial_state() method with comprehensive tests
+- **NEW**: Implemented entries() method for log entry retrieval
+  - Range queries with [low, high) semantics
+  - Size-limited queries with prost::Message::encoded_len()
+  - Proper error handling (Compacted/Unavailable)
+  - Helper methods: first_index(), last_index(), append()
+  - 12 new tests covering edge cases, bounds, size limits, thread safety
+  - Storage Layer now 43% complete (3/7 tasks)
 
 ## Next Steps
 Continue Storage Layer (Critical Path):
 
 **Recommended Next Task**:
 ```bash
-/spec:implement raft mem_storage_entries
+/spec:implement raft mem_storage_term
 ```
-- Implement entries() method for log entry retrieval
-- Handle bounds checking, size limits, compaction, and unavailable entries
-- 5 more Storage Layer tasks remaining after this
+- Implement term() method for term lookup with snapshot fallback
+- Quick 30-minute task to maintain momentum
+- 4 more Storage Layer tasks remaining after this
 
 **Alternative Tracks**:
 
 **Track A (Continue Storage)**:
 ```bash
-/spec:implement raft mem_storage_term
+/spec:implement raft mem_storage_first_last_index
 ```
-- Implement term() method (30 min)
+- Implement first_index() and last_index() methods (30 min)
 - Quick task to maintain momentum
 
 **Track B (Quick Win)**:

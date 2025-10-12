@@ -165,7 +165,7 @@ At current velocity (2 tasks/hour):
   - **Files**: `crates/raft/src/storage.rs`
   - **Acceptance**: initial_state() returns RaftState with HardState and ConfState; new storage returns defaults (term=0, vote=None, commit=0); after set_hard_state(), initial_state() reflects changes
 
-- [ ] **mem_storage_entries** - Storage: entries() (1 hour)
+- [x] **mem_storage_entries** - Storage: entries() (1 hour)
   - **Test**: Empty range, normal range, max_size limit, compacted range, unavailable range
   - **Implement**: Implement entries() with bounds checking
   - **Refactor**: Optimize slice operations

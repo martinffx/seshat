@@ -9,8 +9,9 @@
 //! All fields are wrapped in `RwLock` to provide thread-safe concurrent access.
 //! Multiple readers can access the data simultaneously, but writers have exclusive access.
 
+use prost::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
-use raft::RaftState;
+use raft::{RaftState, StorageError};
 use std::sync::RwLock;
 
 /// In-memory storage for Raft state.
@@ -168,6 +169,198 @@ impl MemStorage {
     /// ```
     pub fn set_conf_state(&self, cs: ConfState) {
         *self.conf_state.write().unwrap() = cs;
+    }
+
+    /// Returns a range of log entries.
+    ///
+    /// Returns log entries in the range `[low, high)`, limiting the total size
+    /// to `max_size` bytes if specified.
+    ///
+    /// # Arguments
+    ///
+    /// * `low` - The inclusive lower bound of the range (first index to return)
+    /// * `high` - The exclusive upper bound of the range (one past the last index)
+    /// * `max_size` - Optional maximum total size in bytes of returned entries
+    ///
+    /// # Returns
+    ///
+    /// Returns a `Result` containing:
+    /// - `Ok(Vec<Entry>)` - The requested entries (may be empty if low == high)
+    /// - `Err(StorageError::Compacted)` - If `low` is less than `first_index()`
+    /// - `Err(StorageError::Unavailable)` - If `high` is greater than `last_index() + 1`
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use seshat_raft::MemStorage;
+    /// use raft::eraftpb::Entry;
+    ///
+    /// let storage = MemStorage::new();
+    /// // With empty storage, requesting any range returns empty or error
+    /// let result = storage.entries(1, 1, None);
+    /// assert!(result.is_ok());
+    /// assert_eq!(result.unwrap().len(), 0);
+    /// ```
+    pub fn entries(&self, low: u64, high: u64, max_size: Option<u64>) -> raft::Result<Vec<Entry>> {
+        // Handle empty range first
+        if low >= high {
+            return Ok(Vec::new());
+        }
+
+        // Check bounds
+        let first = self.first_index()?;
+        let last = self.last_index()?;
+
+        // Check if low is before first available entry (compacted)
+        if low < first {
+            return Err(raft::Error::Store(StorageError::Compacted));
+        }
+
+        // Check if high is beyond available entries
+        // Note: high can be last_index + 1 (to request all entries up to and including last_index)
+        if high > last + 1 {
+            return Err(raft::Error::Store(StorageError::Unavailable));
+        }
+
+        // Get read lock on entries
+        let entries = self.entries.read().unwrap();
+
+        // Handle empty log
+        if entries.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        // Calculate slice bounds
+        // entries vector may not start at index 1 after compaction
+        let offset = entries[0].index;
+
+        // Convert logical indices to vector indices
+        let start_idx = (low.saturating_sub(offset)) as usize;
+        let end_idx = (high.saturating_sub(offset)) as usize;
+
+        // Ensure we don't go out of bounds
+        let start_idx = start_idx.min(entries.len());
+        let end_idx = end_idx.min(entries.len());
+
+        // If start >= end, return empty
+        if start_idx >= end_idx {
+            return Ok(Vec::new());
+        }
+
+        // Get the slice
+        let mut result = Vec::new();
+        let mut total_size: u64 = 0;
+
+        for entry in &entries[start_idx..end_idx] {
+            // Calculate entry size using prost's encoded_len
+            let entry_size = entry.encoded_len() as u64;
+
+            // If we have a size limit and we've already added at least one entry
+            // and adding this entry would exceed the limit, stop
+            if let Some(max) = max_size {
+                if !result.is_empty() && total_size + entry_size > max {
+                    break;
+                }
+            }
+
+            result.push(entry.clone());
+            total_size += entry_size;
+        }
+
+        // Always return at least one entry if any are available
+        // (even if it exceeds max_size)
+        if result.is_empty() && start_idx < end_idx {
+            result.push(entries[start_idx].clone());
+        }
+
+        Ok(result)
+    }
+
+    /// Returns the first index in the log.
+    ///
+    /// This is the index of the first entry available in the log. After log compaction,
+    /// this may be greater than 1 (the first entry that was ever appended).
+    ///
+    /// # Returns
+    ///
+    /// - If there's a snapshot, returns `snapshot.metadata.index + 1`
+    /// - Otherwise, returns 1 (the default first index)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use seshat_raft::MemStorage;
+    ///
+    /// let storage = MemStorage::new();
+    /// assert_eq!(storage.first_index().unwrap(), 1);
+    /// ```
+    pub fn first_index(&self) -> raft::Result<u64> {
+        let snapshot = self.snapshot.read().unwrap();
+        let entries = self.entries.read().unwrap();
+
+        if snapshot.get_metadata().index > 0 {
+            Ok(snapshot.get_metadata().index + 1)
+        } else if !entries.is_empty() {
+            Ok(entries[0].index)
+        } else {
+            Ok(1)
+        }
+    }
+
+    /// Returns the last index in the log.
+    ///
+    /// This is the index of the last entry available in the log.
+    ///
+    /// # Returns
+    ///
+    /// - If there are entries, returns the index of the last entry
+    /// - If there's a snapshot but no entries, returns the snapshot index
+    /// - Otherwise, returns 0 (empty log)
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use seshat_raft::MemStorage;
+    ///
+    /// let storage = MemStorage::new();
+    /// assert_eq!(storage.last_index().unwrap(), 0);
+    /// ```
+    pub fn last_index(&self) -> raft::Result<u64> {
+        let entries = self.entries.read().unwrap();
+        let snapshot = self.snapshot.read().unwrap();
+
+        if let Some(last) = entries.last() {
+            Ok(last.index)
+        } else {
+            Ok(snapshot.get_metadata().index)
+        }
+    }
+
+    /// Appends entries to the log.
+    ///
+    /// This is a helper method for testing. In production use, entries are
+    /// typically appended through the Raft ready processing.
+    ///
+    /// # Arguments
+    ///
+    /// * `ents` - Slice of entries to append
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use seshat_raft::MemStorage;
+    /// use raft::eraftpb::Entry;
+    ///
+    /// let storage = MemStorage::new();
+    /// let entries = vec![
+    ///     Entry { index: 1, term: 1, ..Default::default() },
+    ///     Entry { index: 2, term: 1, ..Default::default() },
+    /// ];
+    /// storage.append(&entries);
+    /// ```
+    pub fn append(&self, ents: &[Entry]) {
+        let mut entries = self.entries.write().unwrap();
+        entries.extend_from_slice(ents);
     }
 }
 
@@ -339,7 +532,9 @@ mod tests {
     fn test_initial_state_returns_defaults() {
         let storage = MemStorage::new();
 
-        let state = storage.initial_state().expect("initial_state should succeed");
+        let state = storage
+            .initial_state()
+            .expect("initial_state should succeed");
 
         // Verify default HardState
         assert_eq!(state.hard_state.term, 0, "Default term should be 0");
@@ -370,7 +565,9 @@ mod tests {
         storage.set_hard_state(new_hard_state);
 
         // Verify initial_state reflects the change
-        let state = storage.initial_state().expect("initial_state should succeed");
+        let state = storage
+            .initial_state()
+            .expect("initial_state should succeed");
         assert_eq!(state.hard_state.term, 10, "Term should be updated to 10");
         assert_eq!(state.hard_state.vote, 3, "Vote should be updated to 3");
         assert_eq!(
@@ -392,7 +589,9 @@ mod tests {
         storage.set_conf_state(new_conf_state);
 
         // Verify initial_state reflects the change
-        let state = storage.initial_state().expect("initial_state should succeed");
+        let state = storage
+            .initial_state()
+            .expect("initial_state should succeed");
         assert_eq!(
             state.conf_state.voters,
             vec![1, 2, 3],
@@ -450,7 +649,9 @@ mod tests {
         let storage = MemStorage::new();
 
         // Get initial state
-        let state1 = storage.initial_state().expect("initial_state should succeed");
+        let state1 = storage
+            .initial_state()
+            .expect("initial_state should succeed");
 
         // Modify storage
         let new_hard_state = HardState {
@@ -460,7 +661,9 @@ mod tests {
         storage.set_hard_state(new_hard_state);
 
         // Get initial state again
-        let state2 = storage.initial_state().expect("initial_state should succeed");
+        let state2 = storage
+            .initial_state()
+            .expect("initial_state should succeed");
 
         // Verify state1 is independent of the change
         assert_eq!(
@@ -487,7 +690,9 @@ mod tests {
 
         // Call initial_state multiple times
         for _ in 0..100 {
-            let state = storage.initial_state().expect("initial_state should succeed");
+            let state = storage
+                .initial_state()
+                .expect("initial_state should succeed");
             assert_eq!(state.hard_state.term, 42);
             assert_eq!(state.hard_state.vote, 7);
             assert_eq!(state.hard_state.commit, 99);
@@ -542,7 +747,9 @@ mod tests {
         };
         storage.set_hard_state(hs);
 
-        let state = storage.initial_state().expect("initial_state should succeed");
+        let state = storage
+            .initial_state()
+            .expect("initial_state should succeed");
         assert_eq!(state.hard_state.term, 1);
         assert!(state.conf_state.voters.is_empty());
         assert!(state.conf_state.learners.is_empty());
@@ -562,11 +769,453 @@ mod tests {
         };
         storage.set_conf_state(cs.clone());
 
-        let state = storage.initial_state().expect("initial_state should succeed");
+        let state = storage
+            .initial_state()
+            .expect("initial_state should succeed");
         assert_eq!(state.conf_state.voters, cs.voters);
         assert_eq!(state.conf_state.learners, cs.learners);
         assert_eq!(state.conf_state.voters_outgoing, cs.voters_outgoing);
         assert_eq!(state.conf_state.learners_next, cs.learners_next);
         assert_eq!(state.conf_state.auto_leave, cs.auto_leave);
+    }
+
+    // ============================================================================
+    // Tests for entries() method
+    // ============================================================================
+
+    #[test]
+    fn test_entries_empty_range_returns_empty_vec() {
+        let storage = MemStorage::new();
+
+        // Query with low == high should return empty vector
+        let result = storage.entries(1, 1, None);
+        assert!(result.is_ok(), "Empty range should succeed");
+        assert_eq!(
+            result.unwrap().len(),
+            0,
+            "Empty range should return no entries"
+        );
+    }
+
+    #[test]
+    fn test_entries_empty_range_on_populated_storage() {
+        let storage = MemStorage::new();
+
+        // Add some entries
+        let entries = vec![
+            Entry {
+                index: 1,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 2,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 3,
+                term: 1,
+                ..Default::default()
+            },
+        ];
+        storage.append(&entries);
+
+        // Query with low == high should still return empty
+        let result = storage.entries(2, 2, None);
+        assert!(result.is_ok(), "Empty range should succeed");
+        assert_eq!(
+            result.unwrap().len(),
+            0,
+            "Empty range should return no entries"
+        );
+    }
+
+    #[test]
+    fn test_entries_normal_range_returns_correct_entries() {
+        let storage = MemStorage::new();
+
+        // Add entries with indices 1, 2, 3, 4, 5
+        let entries = vec![
+            Entry {
+                index: 1,
+                term: 1,
+                data: vec![1],
+                ..Default::default()
+            },
+            Entry {
+                index: 2,
+                term: 1,
+                data: vec![2],
+                ..Default::default()
+            },
+            Entry {
+                index: 3,
+                term: 2,
+                data: vec![3],
+                ..Default::default()
+            },
+            Entry {
+                index: 4,
+                term: 2,
+                data: vec![4],
+                ..Default::default()
+            },
+            Entry {
+                index: 5,
+                term: 3,
+                data: vec![5],
+                ..Default::default()
+            },
+        ];
+        storage.append(&entries);
+
+        // Query range [2, 5) should return entries 2, 3, 4
+        let result = storage.entries(2, 5, None);
+        assert!(result.is_ok(), "Valid range should succeed");
+
+        let returned = result.unwrap();
+        assert_eq!(returned.len(), 3, "Should return 3 entries");
+        assert_eq!(returned[0].index, 2, "First entry should have index 2");
+        assert_eq!(returned[1].index, 3, "Second entry should have index 3");
+        assert_eq!(returned[2].index, 4, "Third entry should have index 4");
+        assert_eq!(returned[0].data, vec![2], "First entry data should match");
+        assert_eq!(returned[1].data, vec![3], "Second entry data should match");
+        assert_eq!(returned[2].data, vec![4], "Third entry data should match");
+    }
+
+    #[test]
+    fn test_entries_single_entry_range() {
+        let storage = MemStorage::new();
+
+        let entries = vec![
+            Entry {
+                index: 1,
+                term: 1,
+                data: vec![1],
+                ..Default::default()
+            },
+            Entry {
+                index: 2,
+                term: 1,
+                data: vec![2],
+                ..Default::default()
+            },
+            Entry {
+                index: 3,
+                term: 2,
+                data: vec![3],
+                ..Default::default()
+            },
+        ];
+        storage.append(&entries);
+
+        // Query single entry [2, 3)
+        let result = storage.entries(2, 3, None);
+        assert!(result.is_ok(), "Single entry range should succeed");
+
+        let returned = result.unwrap();
+        assert_eq!(returned.len(), 1, "Should return 1 entry");
+        assert_eq!(returned[0].index, 2, "Entry should have index 2");
+        assert_eq!(returned[0].data, vec![2], "Entry data should match");
+    }
+
+    #[test]
+    fn test_entries_full_range() {
+        let storage = MemStorage::new();
+
+        let entries = vec![
+            Entry {
+                index: 1,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 2,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 3,
+                term: 2,
+                ..Default::default()
+            },
+        ];
+        storage.append(&entries);
+
+        // Query all entries [1, 4)
+        let result = storage.entries(1, 4, None);
+        assert!(result.is_ok(), "Full range should succeed");
+
+        let returned = result.unwrap();
+        assert_eq!(returned.len(), 3, "Should return all 3 entries");
+        assert_eq!(returned[0].index, 1);
+        assert_eq!(returned[1].index, 2);
+        assert_eq!(returned[2].index, 3);
+    }
+
+    #[test]
+    fn test_entries_with_max_size_returns_partial_results() {
+        let storage = MemStorage::new();
+
+        // Create entries with specific sizes
+        // Each entry has some overhead, so we'll use data to control size
+        let entries = vec![
+            Entry {
+                index: 1,
+                term: 1,
+                data: vec![0; 100],
+                ..Default::default()
+            },
+            Entry {
+                index: 2,
+                term: 1,
+                data: vec![0; 100],
+                ..Default::default()
+            },
+            Entry {
+                index: 3,
+                term: 2,
+                data: vec![0; 100],
+                ..Default::default()
+            },
+            Entry {
+                index: 4,
+                term: 2,
+                data: vec![0; 100],
+                ..Default::default()
+            },
+        ];
+        storage.append(&entries);
+
+        // Request range [1, 5) with size limit that fits only first 2 entries
+        // Each entry is roughly 100+ bytes, so max_size of 250 should get us 2 entries
+        let result = storage.entries(1, 5, Some(250));
+        assert!(result.is_ok(), "Size-limited query should succeed");
+
+        let returned = result.unwrap();
+        assert!(
+            !returned.is_empty() && returned.len() < 4,
+            "Should return partial results (got {} entries)",
+            returned.len()
+        );
+        assert_eq!(returned[0].index, 1, "First entry should have index 1");
+    }
+
+    #[test]
+    fn test_entries_with_max_size_returns_at_least_one_entry() {
+        let storage = MemStorage::new();
+
+        // Create entry larger than max_size
+        let entries = vec![
+            Entry {
+                index: 1,
+                term: 1,
+                data: vec![0; 1000],
+                ..Default::default()
+            },
+            Entry {
+                index: 2,
+                term: 1,
+                data: vec![0; 1000],
+                ..Default::default()
+            },
+        ];
+        storage.append(&entries);
+
+        // Request with very small max_size - should still return at least first entry
+        let result = storage.entries(1, 3, Some(10));
+        assert!(result.is_ok(), "Should succeed even with small max_size");
+
+        let returned = result.unwrap();
+        assert_eq!(returned.len(), 1, "Should return at least one entry");
+        assert_eq!(returned[0].index, 1, "Should return first entry");
+    }
+
+    #[test]
+    fn test_entries_error_when_low_less_than_first_index() {
+        let storage = MemStorage::new();
+
+        // Create a snapshot at index 5
+        let mut snapshot = Snapshot::default();
+        snapshot.mut_metadata().index = 5;
+        snapshot.mut_metadata().term = 2;
+        *storage.snapshot.write().unwrap() = snapshot;
+
+        // Add entries starting from index 6
+        let entries = vec![
+            Entry {
+                index: 6,
+                term: 2,
+                ..Default::default()
+            },
+            Entry {
+                index: 7,
+                term: 3,
+                ..Default::default()
+            },
+        ];
+        storage.append(&entries);
+
+        // first_index() should be 6 (snapshot.index + 1)
+        // Requesting entries before that should fail
+        let result = storage.entries(4, 7, None);
+        assert!(result.is_err(), "Should error when low < first_index");
+
+        match result.unwrap_err() {
+            raft::Error::Store(StorageError::Compacted) => {
+                // Expected error
+            }
+            other => panic!("Expected StorageError::Compacted, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_entries_error_when_high_greater_than_last_index_plus_one() {
+        let storage = MemStorage::new();
+
+        let entries = vec![
+            Entry {
+                index: 1,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 2,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 3,
+                term: 2,
+                ..Default::default()
+            },
+        ];
+        storage.append(&entries);
+
+        // last_index() is 3, so high can be at most 4 (last_index + 1)
+        // Requesting high > 4 should fail
+        let result = storage.entries(1, 5, None);
+        assert!(result.is_err(), "Should error when high > last_index + 1");
+
+        match result.unwrap_err() {
+            raft::Error::Store(StorageError::Unavailable) => {
+                // Expected error
+            }
+            other => panic!("Expected StorageError::Unavailable, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_entries_boundary_at_last_index_plus_one() {
+        let storage = MemStorage::new();
+
+        let entries = vec![
+            Entry {
+                index: 1,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 2,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 3,
+                term: 2,
+                ..Default::default()
+            },
+        ];
+        storage.append(&entries);
+
+        // last_index() is 3, so high = 4 (last_index + 1) should be valid
+        let result = storage.entries(1, 4, None);
+        assert!(result.is_ok(), "high = last_index + 1 should be valid");
+
+        let returned = result.unwrap();
+        assert_eq!(returned.len(), 3, "Should return all entries");
+    }
+
+    #[test]
+    fn test_entries_on_empty_storage() {
+        let storage = MemStorage::new();
+
+        // Empty storage: first_index = 1, last_index = 0
+        // Valid range should be [1, 1) which returns empty
+        let result = storage.entries(1, 1, None);
+        assert!(
+            result.is_ok(),
+            "Empty range on empty storage should succeed"
+        );
+        assert_eq!(result.unwrap().len(), 0);
+
+        // Any request with high > 1 should fail (unavailable)
+        let result = storage.entries(1, 2, None);
+        assert!(
+            result.is_err(),
+            "Should error when requesting unavailable entries"
+        );
+
+        match result.unwrap_err() {
+            raft::Error::Store(StorageError::Unavailable) => {
+                // Expected
+            }
+            other => panic!("Expected StorageError::Unavailable, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_entries_thread_safe() {
+        let storage = Arc::new(MemStorage::new());
+
+        // Populate storage
+        let entries = vec![
+            Entry {
+                index: 1,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 2,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 3,
+                term: 2,
+                ..Default::default()
+            },
+            Entry {
+                index: 4,
+                term: 2,
+                ..Default::default()
+            },
+            Entry {
+                index: 5,
+                term: 3,
+                ..Default::default()
+            },
+        ];
+        storage.append(&entries);
+
+        // Spawn multiple threads reading concurrently
+        let handles: Vec<_> = (0..10)
+            .map(|_| {
+                let storage_clone = Arc::clone(&storage);
+                thread::spawn(move || {
+                    let result = storage_clone.entries(2, 4, None);
+                    assert!(result.is_ok());
+                    let returned = result.unwrap();
+                    assert_eq!(returned.len(), 2);
+                    assert_eq!(returned[0].index, 2);
+                    assert_eq!(returned[1].index, 3);
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().expect("Thread should not panic");
+        }
     }
 }
