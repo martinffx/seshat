@@ -2,9 +2,9 @@
 
 **Status**: In Progress
 **Total Tasks**: 24
-**Completed**: 3/24 (12.5%)
+**Completed**: 4/24 (16.7%)
 **Estimated Time**: 19 hours
-**Time Spent**: 1.5 hours
+**Time Spent**: 2 hours
 
 ## Overview
 
@@ -158,7 +158,7 @@ At current velocity (2 tasks/hour):
   - **Deps**: raft="0.7" (with prost-codec), tokio={version="1", features=["full"]}
   - **Acceptance**: MemStorage struct with hard_state: RwLock<HardState>, conf_state: RwLock<ConfState>, entries: RwLock<Vec<Entry>>, snapshot: RwLock<Snapshot>; MemStorage::new() creates defaults; compiles with raft-rs imports
 
-- [ ] **mem_storage_initial_state** - Storage: initial_state() (30 min)
+- [x] **mem_storage_initial_state** - Storage: initial_state() (30 min)
   - **Test**: New storage returns default HardState and ConfState
   - **Implement**: Implement initial_state() reading from RwLocks
   - **Refactor**: Handle edge cases and add logging
