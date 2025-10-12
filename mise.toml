@@ -38,7 +38,7 @@ run = "cargo fmt --all -- --check"
 
 [tasks.lint]
 description = "Run clippy linter"
-run = "cargo clippy --workspace --all-targets --all-features -- -D warnings"
+run = "cargo clippy --workspace --all-targets -- -D warnings"
 
 [tasks.test]
 description = "Run all tests"

@@ -111,7 +111,7 @@ mod tests {
         term += 1;
         assert_eq!(term, 2);
 
-        term = term + 1;
+        term += 1;
         assert_eq!(term, 3);
     }
 

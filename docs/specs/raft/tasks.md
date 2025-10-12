@@ -2,9 +2,9 @@
 
 **Status**: In Progress
 **Total Tasks**: 24
-**Completed**: 2/24 (8%)
+**Completed**: 3/24 (12.5%)
 **Estimated Time**: 19 hours
-**Time Spent**: 1 hour
+**Time Spent**: 1.5 hours
 
 ## Overview
 
@@ -150,12 +150,12 @@ At current velocity (2 tasks/hour):
 **Dependencies**: Phase 1 (common_foundation)
 **Critical path**: Required before Raft Node
 
-- [ ] **mem_storage_skeleton** - MemStorage Structure (30 min)
+- [x] **mem_storage_skeleton** - MemStorage Structure (30 min)
   - **Test**: MemStorage::new() creation
   - **Implement**: Define MemStorage struct with RwLock fields
   - **Refactor**: Add internal helper methods
   - **Files**: `crates/raft/src/storage.rs`, `crates/raft/src/lib.rs`, `crates/raft/Cargo.toml`
-  - **Deps**: raft="0.7", tokio={version="1", features=["full"]}
+  - **Deps**: raft="0.7" (with prost-codec), tokio={version="1", features=["full"]}
   - **Acceptance**: MemStorage struct with hard_state: RwLock<HardState>, conf_state: RwLock<ConfState>, entries: RwLock<Vec<Entry>>, snapshot: RwLock<Snapshot>; MemStorage::new() creates defaults; compiles with raft-rs imports
 
 - [ ] **mem_storage_initial_state** - Storage: initial_state() (30 min)

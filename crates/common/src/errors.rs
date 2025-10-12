@@ -10,7 +10,7 @@ use thiserror::Error;
 pub enum Error {
     /// Operation attempted on a non-leader node.
     #[error("not leader{}", match .leader_id {
-        Some(id) => format!(": current leader is node {}", id),
+        Some(id) => format!(": current leader is node {id}"),
         None => String::new(),
     })]
     NotLeader {
@@ -144,7 +144,7 @@ mod tests {
     #[test]
     fn test_error_is_debug() {
         let err = Error::NoQuorum;
-        let debug_str = format!("{:?}", err);
+        let debug_str = format!("{err:?}");
         assert!(debug_str.contains("NoQuorum"));
     }
 
@@ -153,7 +153,7 @@ mod tests {
         let err = Error::NotLeader {
             leader_id: Some(42),
         };
-        let debug_str = format!("{:?}", err);
+        let debug_str = format!("{err:?}");
         assert!(debug_str.contains("NotLeader"));
         assert!(debug_str.contains("42"));
     }
@@ -170,7 +170,9 @@ mod tests {
     fn test_result_type_alias_ok() {
         let result: Result<i32> = Ok(42);
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), 42);
+        if let Ok(val) = result {
+            assert_eq!(val, 42);
+        }
     }
 
     #[test]
@@ -240,9 +242,7 @@ mod tests {
     fn test_all_error_variants_are_displayable() {
         let errors = vec![
             Error::NotLeader { leader_id: None },
-            Error::NotLeader {
-                leader_id: Some(1),
-            },
+            Error::NotLeader { leader_id: Some(1) },
             Error::NoQuorum,
             Error::Raft("test".to_string()),
             Error::Storage("test".to_string()),
