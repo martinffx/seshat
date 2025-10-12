@@ -277,6 +277,139 @@ Each spec delivers working, testable functionality. No spec depends on future sp
 
 ---
 
+## Architecture and Data Flow
+
+### Component Architecture
+
+```mermaid
+graph TB
+    Client[Redis Client] -->|RESP Protocol| RESP[RESP Protocol Handler]
+    RESP -->|get/set/del| KV[KV Interface]
+    KV -->|propose| RaftNode[RaftNode Wrapper]
+    RaftNode -->|raft operations| Raw[raft-rs RawNode]
+    Raw -->|read/write log| Mem[MemStorage]
+    Raw -->|apply entries| SM[StateMachine]
+    SM -->|HashMap ops| Data[(In-Memory HashMap)]
+
+    RaftNode -->|gRPC| Peer1[Peer Node 1]
+    RaftNode -->|gRPC| Peer2[Peer Node 2]
+
+    style Client fill:#e1f5ff
+    style RESP fill:#fff4e1
+    style KV fill:#f0e1ff
+    style RaftNode fill:#e1ffe1
+    style Raw fill:#ffe1e1
+    style Mem fill:#fff
+    style SM fill:#fff
+    style Data fill:#f5f5f5
+```
+
+### SET Operation Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant R as RESP Protocol
+    participant K as KV Interface
+    participant RN as RaftNode
+    participant RS as raft-rs RawNode
+    participant P1 as Peer Node 1
+    participant P2 as Peer Node 2
+    participant SM as StateMachine
+
+    C->>R: SET key value
+    R->>K: set(key, value)
+    K->>RN: propose(SET entry)
+    RN->>RS: propose(entry)
+
+    Note over RS: Leader appends to log
+
+    RS->>P1: AppendEntries RPC
+    RS->>P2: AppendEntries RPC
+    P1-->>RS: Success
+    P2-->>RS: Success
+
+    Note over RS: Quorum reached (2/3)
+
+    RS->>SM: apply(SET entry)
+    SM->>SM: HashMap.insert(key, value)
+    RS-->>RN: Entry committed
+    RN-->>K: Ok
+    K-->>R: Ok
+    R-->>C: +OK
+```
+
+### GET Operation Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant R as RESP Protocol
+    participant K as KV Interface
+    participant RN as RaftNode
+    participant SM as StateMachine
+
+    C->>R: GET key
+    R->>K: get(key)
+    K->>RN: check_leader()
+
+    alt Is Leader
+        RN->>SM: read(key)
+        SM->>SM: HashMap.get(key)
+        SM-->>RN: value
+        RN-->>K: Some(value)
+        K-->>R: Some(value)
+        R-->>C: $3\r\nbar
+    else Not Leader
+        RN-->>K: NotLeader(leader_id)
+        K-->>R: NotLeader(leader_id)
+        R-->>C: -MOVED leader_id
+    end
+```
+
+### DEL Operation Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant R as RESP Protocol
+    participant K as KV Interface
+    participant RN as RaftNode
+    participant RS as raft-rs RawNode
+    participant P1 as Peer Node 1
+    participant P2 as Peer Node 2
+    participant SM as StateMachine
+
+    C->>R: DEL key
+    R->>K: del(key)
+    K->>RN: propose(DEL entry)
+    RN->>RS: propose(entry)
+
+    Note over RS: Leader appends to log
+
+    RS->>P1: AppendEntries RPC
+    RS->>P2: AppendEntries RPC
+    P1-->>RS: Success
+    P2-->>RS: Success
+
+    Note over RS: Quorum reached (2/3)
+
+    RS->>SM: apply(DEL entry)
+    SM->>SM: HashMap.remove(key)
+    RS-->>RN: Entry committed
+    RN-->>K: Ok
+    K-->>R: Ok
+    R-->>C: :1
+```
+
+**Key Observations**:
+- **Write operations (SET/DEL)**: Go through full Raft consensus with 2-of-3 quorum
+- **Read operations (GET)**: Leader-only reads in Phase 1 (no consensus required)
+- **Not-leader handling**: Clients redirected to current leader with MOVED error
+- **Strong consistency**: All writes must be committed by majority before returning
+
+---
+
 ## Future Phases
 
 **Phase 2**: Multi-shard cluster with horizontal scalability
