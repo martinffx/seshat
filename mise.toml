@@ -98,8 +98,8 @@ run = [
 ]
 
 [tasks.check]
-description = "Run all checks (format, lint, test)"
-depends = ["format:check", "lint", "test"]
+description = "Format code and run all checks (format, lint, build, test)"
+depends = ["format", "lint", "build", "test"]
 
 [tasks.validate]
 description = "Full validation pipeline (format, lint, build, test)"
