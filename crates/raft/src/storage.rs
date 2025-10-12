@@ -1607,4 +1607,661 @@ mod tests {
             other => panic!("Expected StorageError::Unavailable, got {:?}", other),
         }
     }
+
+    // ============================================================================
+    // Tests for first_index() method
+    // ============================================================================
+
+    #[test]
+    fn test_first_index_empty_log() {
+        let storage = MemStorage::new();
+
+        // Empty log should return 1 as the default first index
+        let result = storage.first_index();
+        assert!(result.is_ok(), "first_index should succeed on empty log");
+        assert_eq!(
+            result.unwrap(),
+            1,
+            "Empty log should have first_index = 1"
+        );
+    }
+
+    #[test]
+    fn test_first_index_after_append() {
+        let storage = MemStorage::new();
+
+        // Append entries starting at index 1
+        let entries = vec![
+            Entry {
+                index: 1,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 2,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 3,
+                term: 2,
+                ..Default::default()
+            },
+        ];
+        storage.append(&entries);
+
+        let result = storage.first_index();
+        assert!(result.is_ok(), "first_index should succeed");
+        assert_eq!(
+            result.unwrap(),
+            1,
+            "first_index should be 1 when entries start at 1"
+        );
+    }
+
+    #[test]
+    fn test_first_index_with_snapshot() {
+        let storage = MemStorage::new();
+
+        // Create a snapshot at index 10
+        let mut snapshot = Snapshot::default();
+        snapshot.mut_metadata().index = 10;
+        snapshot.mut_metadata().term = 3;
+        *storage.snapshot.write().unwrap() = snapshot;
+
+        // No entries yet, first_index should be snapshot.index + 1
+        let result = storage.first_index();
+        assert!(result.is_ok(), "first_index should succeed with snapshot");
+        assert_eq!(
+            result.unwrap(),
+            11,
+            "first_index should be snapshot.index + 1"
+        );
+    }
+
+    #[test]
+    fn test_first_index_with_snapshot_and_entries() {
+        let storage = MemStorage::new();
+
+        // Create a snapshot at index 10
+        let mut snapshot = Snapshot::default();
+        snapshot.mut_metadata().index = 10;
+        snapshot.mut_metadata().term = 3;
+        *storage.snapshot.write().unwrap() = snapshot;
+
+        // Add entries starting from index 11
+        let entries = vec![
+            Entry {
+                index: 11,
+                term: 3,
+                ..Default::default()
+            },
+            Entry {
+                index: 12,
+                term: 3,
+                ..Default::default()
+            },
+            Entry {
+                index: 13,
+                term: 4,
+                ..Default::default()
+            },
+        ];
+        storage.append(&entries);
+
+        // first_index should still be snapshot.index + 1
+        let result = storage.first_index();
+        assert!(result.is_ok(), "first_index should succeed");
+        assert_eq!(
+            result.unwrap(),
+            11,
+            "first_index should be snapshot.index + 1 even with entries"
+        );
+    }
+
+    #[test]
+    fn test_first_index_after_compaction() {
+        let storage = MemStorage::new();
+
+        // Simulate log compaction by:
+        // 1. Creating a snapshot at index 50
+        let mut snapshot = Snapshot::default();
+        snapshot.mut_metadata().index = 50;
+        snapshot.mut_metadata().term = 10;
+        *storage.snapshot.write().unwrap() = snapshot;
+
+        // 2. Adding new entries after the snapshot
+        let entries = vec![
+            Entry {
+                index: 51,
+                term: 10,
+                ..Default::default()
+            },
+            Entry {
+                index: 52,
+                term: 11,
+                ..Default::default()
+            },
+        ];
+        storage.append(&entries);
+
+        let result = storage.first_index();
+        assert!(result.is_ok(), "first_index should succeed after compaction");
+        assert_eq!(
+            result.unwrap(),
+            51,
+            "first_index should be 51 after compaction at index 50"
+        );
+    }
+
+    #[test]
+    fn test_first_index_with_entries_not_starting_at_one() {
+        let storage = MemStorage::new();
+
+        // Directly append entries that don't start at index 1
+        // (simulating entries after compaction)
+        let entries = vec![
+            Entry {
+                index: 20,
+                term: 5,
+                ..Default::default()
+            },
+            Entry {
+                index: 21,
+                term: 5,
+                ..Default::default()
+            },
+        ];
+        storage.append(&entries);
+
+        // Without a snapshot, first_index should return the first entry's index
+        let result = storage.first_index();
+        assert!(result.is_ok(), "first_index should succeed");
+        assert_eq!(
+            result.unwrap(),
+            20,
+            "first_index should match first entry index"
+        );
+    }
+
+    // ============================================================================
+    // Tests for last_index() method
+    // ============================================================================
+
+    #[test]
+    fn test_last_index_empty_log() {
+        let storage = MemStorage::new();
+
+        // Empty log should return 0 as the last index
+        let result = storage.last_index();
+        assert!(result.is_ok(), "last_index should succeed on empty log");
+        assert_eq!(result.unwrap(), 0, "Empty log should have last_index = 0");
+    }
+
+    #[test]
+    fn test_last_index_after_append() {
+        let storage = MemStorage::new();
+
+        // Append entries
+        let entries = vec![
+            Entry {
+                index: 1,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 2,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 3,
+                term: 2,
+                ..Default::default()
+            },
+        ];
+        storage.append(&entries);
+
+        let result = storage.last_index();
+        assert!(result.is_ok(), "last_index should succeed");
+        assert_eq!(
+            result.unwrap(),
+            3,
+            "last_index should be the index of the last entry"
+        );
+    }
+
+    #[test]
+    fn test_last_index_snapshot_only() {
+        let storage = MemStorage::new();
+
+        // Create a snapshot at index 10, no entries
+        let mut snapshot = Snapshot::default();
+        snapshot.mut_metadata().index = 10;
+        snapshot.mut_metadata().term = 3;
+        *storage.snapshot.write().unwrap() = snapshot;
+
+        // With no entries, last_index should return snapshot.index
+        let result = storage.last_index();
+        assert!(result.is_ok(), "last_index should succeed with snapshot only");
+        assert_eq!(
+            result.unwrap(),
+            10,
+            "last_index should be snapshot.index when no entries exist"
+        );
+    }
+
+    #[test]
+    fn test_last_index_with_snapshot_and_entries() {
+        let storage = MemStorage::new();
+
+        // Create a snapshot at index 10
+        let mut snapshot = Snapshot::default();
+        snapshot.mut_metadata().index = 10;
+        snapshot.mut_metadata().term = 3;
+        *storage.snapshot.write().unwrap() = snapshot;
+
+        // Add entries after the snapshot
+        let entries = vec![
+            Entry {
+                index: 11,
+                term: 3,
+                ..Default::default()
+            },
+            Entry {
+                index: 12,
+                term: 3,
+                ..Default::default()
+            },
+            Entry {
+                index: 13,
+                term: 4,
+                ..Default::default()
+            },
+        ];
+        storage.append(&entries);
+
+        // last_index should return the last entry's index, not the snapshot
+        let result = storage.last_index();
+        assert!(result.is_ok(), "last_index should succeed");
+        assert_eq!(
+            result.unwrap(),
+            13,
+            "last_index should be the last entry index, not snapshot index"
+        );
+    }
+
+    #[test]
+    fn test_last_index_after_multiple_appends() {
+        let storage = MemStorage::new();
+
+        // First append
+        let entries1 = vec![
+            Entry {
+                index: 1,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 2,
+                term: 1,
+                ..Default::default()
+            },
+        ];
+        storage.append(&entries1);
+
+        assert_eq!(
+            storage.last_index().unwrap(),
+            2,
+            "After first append, last_index should be 2"
+        );
+
+        // Second append
+        let entries2 = vec![
+            Entry {
+                index: 3,
+                term: 2,
+                ..Default::default()
+            },
+            Entry {
+                index: 4,
+                term: 2,
+                ..Default::default()
+            },
+            Entry {
+                index: 5,
+                term: 3,
+                ..Default::default()
+            },
+        ];
+        storage.append(&entries2);
+
+        assert_eq!(
+            storage.last_index().unwrap(),
+            5,
+            "After second append, last_index should be 5"
+        );
+    }
+
+    #[test]
+    fn test_last_index_single_entry() {
+        let storage = MemStorage::new();
+
+        // Append a single entry
+        let entries = vec![Entry {
+            index: 1,
+            term: 1,
+            ..Default::default()
+        }];
+        storage.append(&entries);
+
+        let result = storage.last_index();
+        assert!(result.is_ok(), "last_index should succeed with single entry");
+        assert_eq!(result.unwrap(), 1, "last_index should be 1 for single entry");
+    }
+
+    // ============================================================================
+    // Tests for first_index() and last_index() invariants
+    // ============================================================================
+
+    #[test]
+    fn test_first_last_index_invariant() {
+        // Test the invariant: first_index <= last_index + 1
+        // This should hold in all valid states
+
+        let storage = MemStorage::new();
+
+        // Case 1: Empty log
+        let first = storage.first_index().unwrap();
+        let last = storage.last_index().unwrap();
+        assert!(
+            first <= last + 1,
+            "Empty log: first_index ({}) <= last_index ({}) + 1",
+            first,
+            last
+        );
+
+        // Case 2: After appending entries
+        let entries = vec![
+            Entry {
+                index: 1,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 2,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 3,
+                term: 2,
+                ..Default::default()
+            },
+        ];
+        storage.append(&entries);
+
+        let first = storage.first_index().unwrap();
+        let last = storage.last_index().unwrap();
+        assert!(
+            first <= last + 1,
+            "With entries: first_index ({}) <= last_index ({}) + 1",
+            first,
+            last
+        );
+
+        // Case 3: With snapshot (need to clear old entries to simulate proper compaction)
+        let mut snapshot = Snapshot::default();
+        snapshot.mut_metadata().index = 10;
+        snapshot.mut_metadata().term = 3;
+        *storage.snapshot.write().unwrap() = snapshot;
+        // Clear old entries that are covered by the snapshot
+        storage.entries.write().unwrap().clear();
+
+        let first = storage.first_index().unwrap();
+        let last = storage.last_index().unwrap();
+        assert!(
+            first <= last + 1,
+            "With snapshot: first_index ({}) <= last_index ({}) + 1",
+            first,
+            last
+        );
+
+        // Case 4: With snapshot and new entries
+        let entries = vec![
+            Entry {
+                index: 11,
+                term: 3,
+                ..Default::default()
+            },
+            Entry {
+                index: 12,
+                term: 4,
+                ..Default::default()
+            },
+        ];
+        storage.append(&entries);
+
+        let first = storage.first_index().unwrap();
+        let last = storage.last_index().unwrap();
+        assert!(
+            first <= last + 1,
+            "With snapshot and entries: first_index ({}) <= last_index ({}) + 1",
+            first,
+            last
+        );
+    }
+
+    #[test]
+    fn test_first_last_index_boundaries() {
+        let storage = MemStorage::new();
+
+        // Empty log special case
+        assert_eq!(storage.first_index().unwrap(), 1);
+        assert_eq!(storage.last_index().unwrap(), 0);
+        // This is the one case where first > last, but first <= last + 1 still holds
+
+        // Single entry
+        storage.append(&[Entry {
+            index: 1,
+            term: 1,
+            ..Default::default()
+        }]);
+        assert_eq!(storage.first_index().unwrap(), 1);
+        assert_eq!(storage.last_index().unwrap(), 1);
+
+        // Multiple entries
+        storage.append(&[
+            Entry {
+                index: 2,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 3,
+                term: 1,
+                ..Default::default()
+            },
+        ]);
+        assert_eq!(storage.first_index().unwrap(), 1);
+        assert_eq!(storage.last_index().unwrap(), 3);
+    }
+
+    #[test]
+    fn test_first_last_index_thread_safety() {
+        let storage = Arc::new(MemStorage::new());
+
+        // Populate storage
+        let entries = vec![
+            Entry {
+                index: 1,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 2,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 3,
+                term: 2,
+                ..Default::default()
+            },
+        ];
+        storage.append(&entries);
+
+        // Spawn multiple threads reading first_index and last_index concurrently
+        let handles: Vec<_> = (0..10)
+            .map(|_| {
+                let storage_clone = Arc::clone(&storage);
+                thread::spawn(move || {
+                    let first = storage_clone.first_index().unwrap();
+                    let last = storage_clone.last_index().unwrap();
+                    assert_eq!(first, 1, "first_index should be 1");
+                    assert_eq!(last, 3, "last_index should be 3");
+                    assert!(
+                        first <= last + 1,
+                        "Invariant should hold: first_index <= last_index + 1"
+                    );
+                })
+            })
+            .collect();
+
+        for handle in handles {
+            handle.join().expect("Thread should not panic");
+        }
+    }
+
+    #[test]
+    fn test_first_last_index_consistency() {
+        let storage = MemStorage::new();
+
+        // Test that multiple consecutive calls return the same values
+        for _ in 0..100 {
+            let first1 = storage.first_index().unwrap();
+            let last1 = storage.last_index().unwrap();
+            let first2 = storage.first_index().unwrap();
+            let last2 = storage.last_index().unwrap();
+
+            assert_eq!(first1, first2, "Consecutive first_index calls should match");
+            assert_eq!(last1, last2, "Consecutive last_index calls should match");
+        }
+
+        // Add entries and test again
+        let entries = vec![
+            Entry {
+                index: 1,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 2,
+                term: 1,
+                ..Default::default()
+            },
+        ];
+        storage.append(&entries);
+
+        for _ in 0..100 {
+            let first1 = storage.first_index().unwrap();
+            let last1 = storage.last_index().unwrap();
+            let first2 = storage.first_index().unwrap();
+            let last2 = storage.last_index().unwrap();
+
+            assert_eq!(first1, first2, "Consecutive first_index calls should match");
+            assert_eq!(last1, last2, "Consecutive last_index calls should match");
+        }
+    }
+
+    #[test]
+    fn test_first_last_index_with_large_snapshot() {
+        let storage = MemStorage::new();
+
+        // Create a snapshot at a large index
+        let mut snapshot = Snapshot::default();
+        snapshot.mut_metadata().index = 1_000_000;
+        snapshot.mut_metadata().term = 100;
+        *storage.snapshot.write().unwrap() = snapshot;
+
+        let first = storage.first_index().unwrap();
+        let last = storage.last_index().unwrap();
+
+        assert_eq!(first, 1_000_001, "first_index should be snapshot.index + 1");
+        assert_eq!(last, 1_000_000, "last_index should be snapshot.index");
+        assert!(
+            first <= last + 1,
+            "Invariant should hold even with large indices"
+        );
+    }
+
+    #[test]
+    fn test_first_last_index_multiple_scenarios() {
+        let storage = MemStorage::new();
+
+        // Scenario 1: Empty
+        assert_eq!(storage.first_index().unwrap(), 1);
+        assert_eq!(storage.last_index().unwrap(), 0);
+
+        // Scenario 2: Add entries
+        storage.append(&[
+            Entry {
+                index: 1,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 2,
+                term: 1,
+                ..Default::default()
+            },
+        ]);
+        assert_eq!(storage.first_index().unwrap(), 1);
+        assert_eq!(storage.last_index().unwrap(), 2);
+
+        // Scenario 3: Add more entries
+        storage.append(&[
+            Entry {
+                index: 3,
+                term: 2,
+                ..Default::default()
+            },
+            Entry {
+                index: 4,
+                term: 2,
+                ..Default::default()
+            },
+            Entry {
+                index: 5,
+                term: 3,
+                ..Default::default()
+            },
+        ]);
+        assert_eq!(storage.first_index().unwrap(), 1);
+        assert_eq!(storage.last_index().unwrap(), 5);
+
+        // Scenario 4: Add snapshot (simulate compaction)
+        let mut snapshot = Snapshot::default();
+        snapshot.mut_metadata().index = 3;
+        snapshot.mut_metadata().term = 2;
+        *storage.snapshot.write().unwrap() = snapshot;
+        assert_eq!(storage.first_index().unwrap(), 4);
+        assert_eq!(storage.last_index().unwrap(), 5);
+
+        // Scenario 5: Add more entries after snapshot
+        storage.append(&[
+            Entry {
+                index: 6,
+                term: 3,
+                ..Default::default()
+            },
+            Entry {
+                index: 7,
+                term: 4,
+                ..Default::default()
+            },
+        ]);
+        assert_eq!(storage.first_index().unwrap(), 4);
+        assert_eq!(storage.last_index().unwrap(), 7);
+    }
 }

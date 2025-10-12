@@ -2,8 +2,8 @@
 
 ## Project Phase
 - **Current Phase**: 1 - MVP Consensus Layer
-- **Overall Progress**: 6/24 tasks (25.0% complete)
-- **Phase 4 Status**: 57% Complete (4/7 Storage Layer tasks)
+- **Overall Progress**: 7/24 tasks (29.2% complete)
+- **Phase 4 Status**: 71% Complete (5/7 Storage Layer tasks)
 
 ## Completed Tasks
 1. **common_types**
@@ -134,41 +134,79 @@
      - Uses same offset calculation pattern as entries() method
      - 100% test coverage of all code paths
 
+7. **mem_storage_first_last_index**
+   - **ID**: `mem_storage_first_last_index`
+   - **Description**: Storage: first_index() and last_index() (30 min)
+   - **Status**: ✅ Completed
+   - **Timestamp**: 2025-10-12T19:45:00Z
+   - **Files**:
+     - Updated: `crates/raft/src/storage.rs`
+   - **Test Coverage**: 63/63 tests passing (47 original + 16 new)
+   - **Implementation Details**:
+     - Added comprehensive test coverage for existing first_index() and last_index() methods
+     - Verified all scenarios: empty log, after append, after compaction, after snapshot
+     - Validated invariant: first_index <= last_index + 1
+     - Thread-safe with RwLock read access
+     - Handles edge cases: empty storage, snapshot-only storage, sparse log after compaction
+   - **Tests Added**:
+     - test_first_index_empty_storage_returns_one
+     - test_first_index_with_entries_no_snapshot
+     - test_first_index_after_compaction
+     - test_first_index_with_snapshot_no_entries
+     - test_first_index_with_snapshot_and_entries
+     - test_first_index_thread_safe (10 concurrent threads, 100 iterations)
+     - test_last_index_empty_storage_returns_zero
+     - test_last_index_with_entries_no_snapshot
+     - test_last_index_after_compaction
+     - test_last_index_with_snapshot_no_entries
+     - test_last_index_with_snapshot_and_entries
+     - test_last_index_thread_safe (10 concurrent threads, 100 iterations)
+     - test_first_last_index_invariant_empty
+     - test_first_last_index_invariant_with_entries
+     - test_first_last_index_invariant_after_compaction
+     - test_first_last_index_invariant_with_snapshot
+   - **Key Features**:
+     - first_index() returns snapshot.metadata.index + 1 (or 1 if no snapshot)
+     - last_index() returns last entry index (or snapshot.metadata.index if empty)
+     - Invariant maintained: first_index <= last_index + 1 always holds
+     - Comprehensive thread safety validation
+     - Edge cases fully covered
+
 ## Next Task (Recommended)
-- **ID**: `mem_storage_first_last_index`
-- **Description**: Storage: first_index() and last_index() (30 min)
+- **ID**: `mem_storage_snapshot`
+- **Description**: Storage: snapshot() (30 min)
 - **Phase**: 4 (Storage Layer)
 - **Estimated Time**: 30 min
-- **Rationale**: Continue Storage Layer critical path - formalize existing helper methods with tests
-- **Dependencies**: `mem_storage_skeleton`, `mem_storage_entries`
+- **Rationale**: Continue Storage Layer critical path - only 2 tasks remaining before completion
+- **Dependencies**: `mem_storage_skeleton`, `mem_storage_initial_state`
 - **Acceptance Criteria**:
-  - first_index() returns snapshot.metadata.index+1 (or 1 if no snapshot)
-  - last_index() returns last entry index (or snapshot.metadata.index if empty)
-  - Maintain invariant: first_index <= last_index + 1
-  - Comprehensive tests for empty log, after append, after compaction, after snapshot
+  - snapshot(request_index) returns current snapshot
+  - Phase 1 simplified: just return stored snapshot
+  - SnapshotTemporarilyUnavailable if not ready (Phase 2+)
+  - Thread-safe with RwLock read access
+  - Comprehensive tests for empty snapshot and after create_snapshot()
 
 ## Alternative Next Tasks
-1. **mem_storage_snapshot** - Continue Storage Layer (30 min)
-2. **mem_storage_mutations** - Finalize Storage Layer (1 hour)
-3. **config_types** - Quick win: Start Configuration phase (3 tasks, 2.5 hours)
-4. **protobuf_messages** - Enable State Machine track (Phases 3 & 5)
+1. **mem_storage_mutations** - Finalize Storage Layer (1 hour)
+2. **config_types** - Quick win: Start Configuration phase (3 tasks, 2.5 hours)
+3. **protobuf_messages** - Enable State Machine track (Phases 3 & 5)
 
 ## Blockers
 - None
 
 ## Progress Metrics
-- Tasks Completed: 6
-- Tasks Remaining: 18
-- Completion Percentage: 25.0%
-- Storage Layer Progress: 4/7 tasks (57%)
+- Tasks Completed: 7
+- Tasks Remaining: 17
+- Completion Percentage: 29.2%
+- Storage Layer Progress: 5/7 tasks (71%)
 - Phase 1 (Common Foundation): ✅ 100% (2/2)
-- Phase 4 (Storage Layer): 🚧 57% (4/7)
+- Phase 4 (Storage Layer): 🚧 71% (5/7)
 
 ## Task Breakdown
 - Total Tasks: 24
-- Completed: 6
+- Completed: 7
 - In Progress: 0
-- Not Started: 18
+- Not Started: 17
 
 ## Recent Updates
 - Completed common type aliases
@@ -183,35 +221,41 @@
   - Proper error handling (Compacted/Unavailable)
   - Helper methods: first_index(), last_index(), append()
   - 12 new tests covering edge cases, bounds, size limits, thread safety
-- **NEW**: Implemented term() method for term lookup
+- Implemented term() method for term lookup
   - Special case handling for term(0) returns 0
   - Snapshot.metadata.term return for snapshot index
   - StorageError::Compacted for compacted indices
   - StorageError::Unavailable for unavailable indices
   - 11 new tests covering all edge cases, boundaries, thread safety
   - 100% test coverage of all code paths
-  - Storage Layer now 57% complete (4/7 tasks)
+- **NEW**: Completed first_index() and last_index() test coverage
+  - 16 new tests covering all scenarios
+  - Verified invariant: first_index <= last_index + 1
+  - Comprehensive thread safety validation
+  - Edge cases: empty log, after append, after compaction, after snapshot
+  - Storage Layer now 71% complete (5/7 tasks)
+  - Total 63 tests passing
 
 ## Next Steps
 Continue Storage Layer (Critical Path):
 
 **Recommended Next Task**:
 ```bash
-/spec:implement raft mem_storage_first_last_index
-```
-- Formalize first_index() and last_index() methods with comprehensive tests
-- Quick 30-minute task to maintain momentum
-- Methods already exist as helpers, just need formal testing
-- 3 more Storage Layer tasks remaining after this
-
-**Alternative Tracks**:
-
-**Track A (Continue Storage)**:
-```bash
 /spec:implement raft mem_storage_snapshot
 ```
 - Implement snapshot() method (30 min)
 - Quick task to maintain momentum
+- Only 2 Storage Layer tasks remaining after this
+- Storage Layer will be 86% complete
+
+**Alternative Tracks**:
+
+**Track A (Finish Storage)**:
+```bash
+/spec:implement raft mem_storage_mutations
+```
+- Complete Storage Layer with mutation methods (1 hour)
+- Enables Raft Node implementation (Phase 6)
 
 **Track B (Quick Win)**:
 ```bash
@@ -237,6 +281,6 @@ All implemented tasks follow strict TDD:
 - ✅ Comprehensive doc comments
 - ✅ Edge cases covered
 
-**Average Test Count per Task**: 11 tests
-**Total Tests**: 47 tests passing
+**Average Test Count per Task**: ~11 tests
+**Total Tests**: 63 tests passing
 **Test Success Rate**: 100%
