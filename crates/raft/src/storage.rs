@@ -498,6 +498,193 @@ impl MemStorage {
         let mut entries = self.entries.write().unwrap();
         entries.extend_from_slice(ents);
     }
+
+    /// Applies a snapshot to the storage.
+    ///
+    /// This method replaces the entire storage state with the given snapshot.
+    /// All log entries covered by the snapshot (entries with index <= snapshot.metadata.index)
+    /// are removed. The hard state and configuration state are updated from the snapshot metadata.
+    ///
+    /// # Arguments
+    ///
+    /// * `snapshot` - The snapshot to apply
+    ///
+    /// # Thread Safety
+    ///
+    /// This method acquires write locks on all storage fields. It is safe to call
+    /// concurrently with other methods, but write operations are serialized.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use seshat_raft::MemStorage;
+    /// use raft::eraftpb::{Snapshot, ConfState};
+    ///
+    /// let storage = MemStorage::new();
+    ///
+    /// // Create a snapshot
+    /// let mut snapshot = Snapshot::default();
+    /// snapshot.mut_metadata().index = 10;
+    /// snapshot.mut_metadata().term = 3;
+    /// snapshot.mut_metadata().conf_state = Some(ConfState {
+    ///     voters: vec![1, 2, 3],
+    ///     ..Default::default()
+    /// });
+    /// snapshot.data = vec![1, 2, 3, 4, 5];
+    ///
+    /// // Apply snapshot
+    /// storage.apply_snapshot(snapshot.clone()).unwrap();
+    ///
+    /// // Verify snapshot was applied
+    /// let retrieved = storage.snapshot(0).unwrap();
+    /// assert_eq!(retrieved.get_metadata().index, 10);
+    /// assert_eq!(retrieved.get_metadata().term, 3);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Lock acquisition fails (lock poisoning)
+    pub fn apply_snapshot(&self, snapshot: Snapshot) -> raft::Result<()> {
+        // Get snapshot index and term for updating hard_state
+        let snap_index = snapshot.get_metadata().index;
+        let snap_term = snapshot.get_metadata().term;
+
+        // Acquire write locks in consistent order to prevent deadlocks
+        let mut storage_snapshot = self.snapshot.write().unwrap();
+        let mut entries = self.entries.write().unwrap();
+        let mut hard_state = self.hard_state.write().unwrap();
+        let mut conf_state = self.conf_state.write().unwrap();
+
+        // Replace snapshot
+        *storage_snapshot = snapshot.clone();
+
+        // Remove entries covered by the snapshot
+        // Keep only entries with index > snapshot.metadata.index
+        entries.retain(|entry| entry.index > snap_index);
+
+        // Update hard_state commit to at least snapshot index
+        if hard_state.commit < snap_index {
+            hard_state.commit = snap_index;
+        }
+        // Update term if snapshot term is higher
+        if hard_state.term < snap_term {
+            hard_state.term = snap_term;
+        }
+
+        // Update conf_state from snapshot metadata
+        if let Some(ref cs) = snapshot.get_metadata().conf_state {
+            *conf_state = cs.clone();
+        }
+
+        Ok(())
+    }
+
+    /// Appends entries to the log with proper conflict resolution.
+    ///
+    /// This method implements the Raft log append logic with truncation of conflicting
+    /// entries. If an incoming entry has the same index as an existing entry but a
+    /// different term, all entries from that point onwards are removed before appending
+    /// the new entries.
+    ///
+    /// # Arguments
+    ///
+    /// * `entries` - Slice of entries to append
+    ///
+    /// # Thread Safety
+    ///
+    /// This method acquires a write lock on the entries field. Multiple concurrent
+    /// calls are serialized.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use seshat_raft::MemStorage;
+    /// use raft::eraftpb::Entry;
+    ///
+    /// let storage = MemStorage::new();
+    ///
+    /// // Append initial entries
+    /// let entries1 = vec![
+    ///     Entry { index: 1, term: 1, ..Default::default() },
+    ///     Entry { index: 2, term: 1, ..Default::default() },
+    ///     Entry { index: 3, term: 1, ..Default::default() },
+    /// ];
+    /// storage.wl_append_entries(&entries1).unwrap();
+    /// assert_eq!(storage.last_index().unwrap(), 3);
+    ///
+    /// // Append conflicting entries (will truncate from index 2)
+    /// let entries2 = vec![
+    ///     Entry { index: 2, term: 2, ..Default::default() },
+    ///     Entry { index: 3, term: 2, ..Default::default() },
+    /// ];
+    /// storage.wl_append_entries(&entries2).unwrap();
+    /// assert_eq!(storage.last_index().unwrap(), 3);
+    /// assert_eq!(storage.term(2).unwrap(), 2);
+    /// assert_eq!(storage.term(3).unwrap(), 2);
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - Lock acquisition fails (lock poisoning)
+    pub fn wl_append_entries(&self, entries: &[Entry]) -> raft::Result<()> {
+        // Empty entries slice is valid - just return
+        if entries.is_empty() {
+            return Ok(());
+        }
+
+        // Acquire write lock on entries
+        let mut storage_entries = self.entries.write().unwrap();
+
+        // If storage is empty, just append all entries
+        if storage_entries.is_empty() {
+            storage_entries.extend_from_slice(entries);
+            return Ok(());
+        }
+
+        // Find the first conflicting entry
+        let first_new_index = entries[0].index;
+        let storage_offset = storage_entries[0].index;
+
+        // If new entries start after our log, just append
+        if first_new_index > storage_entries.last().unwrap().index {
+            storage_entries.extend_from_slice(entries);
+            return Ok(());
+        }
+
+        // If new entries start before our log, we need to handle overlap
+        if first_new_index < storage_offset {
+            // New entries start before our log - this shouldn't happen normally
+            // but we'll handle it by clearing everything and appending
+            storage_entries.clear();
+            storage_entries.extend_from_slice(entries);
+            return Ok(());
+        }
+
+        // Find conflict point
+        for (i, entry) in entries.iter().enumerate() {
+            let storage_idx = (entry.index - storage_offset) as usize;
+
+            // If this entry is beyond our current log, append remaining entries
+            if storage_idx >= storage_entries.len() {
+                storage_entries.extend_from_slice(&entries[i..]);
+                return Ok(());
+            }
+
+            // Check for conflict
+            if storage_entries[storage_idx].term != entry.term {
+                // Found conflict - truncate from this point and append new entries
+                storage_entries.truncate(storage_idx);
+                storage_entries.extend_from_slice(&entries[i..]);
+                return Ok(());
+            }
+
+            // Terms match - this entry is already in the log, continue checking
+        }
+
+        Ok(())
+    }
 }
 
 impl Default for MemStorage {
@@ -2540,5 +2727,702 @@ mod tests {
         for handle in handles {
             handle.join().expect("Thread should not panic");
         }
+    }
+
+    // ============================================================================
+    // Tests for apply_snapshot() method
+    // ============================================================================
+
+    #[test]
+    fn test_apply_snapshot_replaces_all_state() {
+        let storage = MemStorage::new();
+
+        // Add some initial entries
+        let entries = vec![
+            Entry {
+                index: 1,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 2,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 3,
+                term: 2,
+                ..Default::default()
+            },
+        ];
+        storage.append(&entries);
+
+        // Create a snapshot at index 5
+        let mut snapshot = Snapshot::default();
+        snapshot.mut_metadata().index = 5;
+        snapshot.mut_metadata().term = 3;
+        snapshot.mut_metadata().conf_state = Some(ConfState {
+            voters: vec![1, 2, 3],
+            ..Default::default()
+        });
+        snapshot.data = vec![10, 20, 30];
+
+        // Apply snapshot
+        let result = storage.apply_snapshot(snapshot.clone());
+        assert!(result.is_ok(), "apply_snapshot should succeed");
+
+        // Verify snapshot was stored
+        let stored_snap = storage.snapshot(0).unwrap();
+        assert_eq!(stored_snap.get_metadata().index, 5);
+        assert_eq!(stored_snap.get_metadata().term, 3);
+        assert_eq!(stored_snap.data, vec![10, 20, 30]);
+
+        // Verify entries covered by snapshot were removed
+        let remaining_entries = storage.entries.read().unwrap();
+        assert!(
+            remaining_entries.is_empty(),
+            "All entries should be removed as they are covered by snapshot"
+        );
+    }
+
+    #[test]
+    fn test_apply_snapshot_clears_entries_covered_by_snapshot() {
+        let storage = MemStorage::new();
+
+        // Add entries 1-10
+        let entries: Vec<Entry> = (1..=10)
+            .map(|i| Entry {
+                index: i,
+                term: 1,
+                ..Default::default()
+            })
+            .collect();
+        storage.append(&entries);
+
+        // Apply snapshot at index 5
+        let mut snapshot = Snapshot::default();
+        snapshot.mut_metadata().index = 5;
+        snapshot.mut_metadata().term = 2;
+
+        storage.apply_snapshot(snapshot).unwrap();
+
+        // Only entries 6-10 should remain
+        let remaining = storage.entries.read().unwrap();
+        assert_eq!(remaining.len(), 5, "Only entries after snapshot should remain");
+        assert_eq!(remaining[0].index, 6, "First remaining entry should be index 6");
+        assert_eq!(
+            remaining[4].index, 10,
+            "Last remaining entry should be index 10"
+        );
+    }
+
+    #[test]
+    fn test_apply_snapshot_updates_hard_state() {
+        let storage = MemStorage::new();
+
+        // Set initial hard state
+        storage.set_hard_state(HardState {
+            term: 1,
+            vote: 1,
+            commit: 2,
+        });
+
+        // Apply snapshot with higher term and commit
+        let mut snapshot = Snapshot::default();
+        snapshot.mut_metadata().index = 10;
+        snapshot.mut_metadata().term = 5;
+
+        storage.apply_snapshot(snapshot).unwrap();
+
+        // Verify hard state was updated
+        let hard_state = storage.hard_state.read().unwrap();
+        assert_eq!(
+            hard_state.term, 5,
+            "Term should be updated to snapshot term"
+        );
+        assert_eq!(
+            hard_state.commit, 10,
+            "Commit should be updated to snapshot index"
+        );
+    }
+
+    #[test]
+    fn test_apply_snapshot_preserves_higher_hard_state_values() {
+        let storage = MemStorage::new();
+
+        // Set high commit
+        storage.set_hard_state(HardState {
+            term: 10,
+            vote: 1,
+            commit: 20,
+        });
+
+        // Apply snapshot with lower values
+        let mut snapshot = Snapshot::default();
+        snapshot.mut_metadata().index = 5;
+        snapshot.mut_metadata().term = 3;
+
+        storage.apply_snapshot(snapshot).unwrap();
+
+        // Verify higher values were preserved
+        let hard_state = storage.hard_state.read().unwrap();
+        assert_eq!(
+            hard_state.term, 10,
+            "Higher term should be preserved"
+        );
+        assert_eq!(
+            hard_state.commit, 20,
+            "Higher commit should be preserved"
+        );
+    }
+
+    #[test]
+    fn test_apply_snapshot_updates_conf_state() {
+        let storage = MemStorage::new();
+
+        // Set initial conf state
+        storage.set_conf_state(ConfState {
+            voters: vec![1, 2],
+            learners: vec![3],
+            ..Default::default()
+        });
+
+        // Apply snapshot with different conf state
+        let mut snapshot = Snapshot::default();
+        snapshot.mut_metadata().index = 10;
+        snapshot.mut_metadata().term = 5;
+        snapshot.mut_metadata().conf_state = Some(ConfState {
+            voters: vec![4, 5, 6],
+            learners: vec![7, 8],
+            ..Default::default()
+        });
+
+        storage.apply_snapshot(snapshot).unwrap();
+
+        // Verify conf state was updated
+        let conf_state = storage.conf_state.read().unwrap();
+        assert_eq!(
+            conf_state.voters,
+            vec![4, 5, 6],
+            "Voters should be updated from snapshot"
+        );
+        assert_eq!(
+            conf_state.learners,
+            vec![7, 8],
+            "Learners should be updated from snapshot"
+        );
+    }
+
+    #[test]
+    fn test_apply_snapshot_with_no_conf_state_in_metadata() {
+        let storage = MemStorage::new();
+
+        // Set initial conf state
+        storage.set_conf_state(ConfState {
+            voters: vec![1, 2, 3],
+            ..Default::default()
+        });
+
+        // Apply snapshot without conf_state in metadata
+        let mut snapshot = Snapshot::default();
+        snapshot.mut_metadata().index = 10;
+        snapshot.mut_metadata().term = 5;
+        // Don't set conf_state
+
+        storage.apply_snapshot(snapshot).unwrap();
+
+        // Verify conf state was not changed
+        let conf_state = storage.conf_state.read().unwrap();
+        assert_eq!(
+            conf_state.voters,
+            vec![1, 2, 3],
+            "Conf state should remain unchanged when snapshot has no conf_state"
+        );
+    }
+
+    #[test]
+    fn test_apply_snapshot_thread_safety() {
+        let storage = Arc::new(MemStorage::new());
+
+        // Add initial entries
+        let entries: Vec<Entry> = (1..=20)
+            .map(|i| Entry {
+                index: i,
+                term: 1,
+                ..Default::default()
+            })
+            .collect();
+        storage.append(&entries);
+
+        // Create multiple snapshots
+        let snapshots: Vec<Snapshot> = (1..=5)
+            .map(|i| {
+                let mut snap = Snapshot::default();
+                snap.mut_metadata().index = i * 5;
+                snap.mut_metadata().term = i;
+                snap.data = vec![i as u8; 100];
+                snap
+            })
+            .collect();
+
+        // Apply snapshots concurrently (should be serialized by write locks)
+        let handles: Vec<_> = snapshots
+            .into_iter()
+            .map(|snap| {
+                let storage_clone = Arc::clone(&storage);
+                thread::spawn(move || {
+                    storage_clone.apply_snapshot(snap).unwrap();
+                })
+            })
+            .collect();
+
+        // Wait for all threads
+        for handle in handles {
+            handle.join().expect("Thread should not panic");
+        }
+
+        // Verify final state is consistent (one of the snapshots was applied)
+        let final_snap = storage.snapshot(0).unwrap();
+        assert!(
+            final_snap.get_metadata().index > 0,
+            "A snapshot should have been applied"
+        );
+
+        // Verify entries are consistent with snapshot
+        let entries = storage.entries.read().unwrap();
+        if !entries.is_empty() {
+            assert!(
+                entries[0].index > final_snap.get_metadata().index,
+                "Remaining entries should be after snapshot index"
+            );
+        }
+    }
+
+    #[test]
+    fn test_apply_snapshot_empty_log() {
+        let storage = MemStorage::new();
+
+        // Apply snapshot on empty log
+        let mut snapshot = Snapshot::default();
+        snapshot.mut_metadata().index = 5;
+        snapshot.mut_metadata().term = 2;
+        snapshot.data = vec![1, 2, 3];
+
+        let result = storage.apply_snapshot(snapshot.clone());
+        assert!(result.is_ok(), "apply_snapshot should succeed on empty log");
+
+        // Verify snapshot was stored
+        let stored = storage.snapshot(0).unwrap();
+        assert_eq!(stored.get_metadata().index, 5);
+        assert_eq!(stored.get_metadata().term, 2);
+        assert_eq!(stored.data, vec![1, 2, 3]);
+    }
+
+    // ============================================================================
+    // Tests for wl_append_entries() method
+    // ============================================================================
+
+    #[test]
+    fn test_wl_append_entries_to_empty_log() {
+        let storage = MemStorage::new();
+
+        // Append to empty log
+        let entries = vec![
+            Entry {
+                index: 1,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 2,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 3,
+                term: 2,
+                ..Default::default()
+            },
+        ];
+
+        let result = storage.wl_append_entries(&entries);
+        assert!(result.is_ok(), "wl_append_entries should succeed");
+
+        // Verify entries were appended
+        assert_eq!(storage.last_index().unwrap(), 3);
+        let stored = storage.entries.read().unwrap();
+        assert_eq!(stored.len(), 3);
+        assert_eq!(stored[0].index, 1);
+        assert_eq!(stored[2].index, 3);
+    }
+
+    #[test]
+    fn test_wl_append_entries_after_existing_entries() {
+        let storage = MemStorage::new();
+
+        // Add initial entries
+        let entries1 = vec![
+            Entry {
+                index: 1,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 2,
+                term: 1,
+                ..Default::default()
+            },
+        ];
+        storage.wl_append_entries(&entries1).unwrap();
+
+        // Append more entries after existing ones
+        let entries2 = vec![
+            Entry {
+                index: 3,
+                term: 2,
+                ..Default::default()
+            },
+            Entry {
+                index: 4,
+                term: 2,
+                ..Default::default()
+            },
+        ];
+        storage.wl_append_entries(&entries2).unwrap();
+
+        // Verify all entries are present
+        assert_eq!(storage.last_index().unwrap(), 4);
+        let stored = storage.entries.read().unwrap();
+        assert_eq!(stored.len(), 4);
+        assert_eq!(stored[0].index, 1);
+        assert_eq!(stored[3].index, 4);
+    }
+
+    #[test]
+    fn test_wl_append_entries_truncates_conflicting_entries() {
+        let storage = MemStorage::new();
+
+        // Add initial entries in term 1
+        let entries1 = vec![
+            Entry {
+                index: 1,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 2,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 3,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 4,
+                term: 1,
+                ..Default::default()
+            },
+        ];
+        storage.wl_append_entries(&entries1).unwrap();
+
+        // Append conflicting entries (term 2 starting at index 2)
+        let entries2 = vec![
+            Entry {
+                index: 2,
+                term: 2,
+                ..Default::default()
+            },
+            Entry {
+                index: 3,
+                term: 2,
+                ..Default::default()
+            },
+        ];
+        storage.wl_append_entries(&entries2).unwrap();
+
+        // Verify old entries were truncated and new ones appended
+        assert_eq!(storage.last_index().unwrap(), 3);
+        let stored = storage.entries.read().unwrap();
+        assert_eq!(stored.len(), 3);
+        assert_eq!(stored[0].index, 1);
+        assert_eq!(stored[0].term, 1); // First entry unchanged
+        assert_eq!(stored[1].index, 2);
+        assert_eq!(stored[1].term, 2); // Replaced with term 2
+        assert_eq!(stored[2].index, 3);
+        assert_eq!(stored[2].term, 2); // Replaced with term 2
+    }
+
+    #[test]
+    fn test_wl_append_entries_no_conflict_when_terms_match() {
+        let storage = MemStorage::new();
+
+        // Add initial entries
+        let entries1 = vec![
+            Entry {
+                index: 1,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 2,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 3,
+                term: 2,
+                ..Default::default()
+            },
+        ];
+        storage.wl_append_entries(&entries1).unwrap();
+
+        // Append entries with matching terms (should not truncate)
+        let entries2 = vec![
+            Entry {
+                index: 2,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 3,
+                term: 2,
+                ..Default::default()
+            },
+            Entry {
+                index: 4,
+                term: 2,
+                ..Default::default()
+            },
+        ];
+        storage.wl_append_entries(&entries2).unwrap();
+
+        // Verify no truncation occurred, new entry was appended
+        assert_eq!(storage.last_index().unwrap(), 4);
+        let stored = storage.entries.read().unwrap();
+        assert_eq!(stored.len(), 4);
+        assert_eq!(stored[0].term, 1);
+        assert_eq!(stored[1].term, 1);
+        assert_eq!(stored[2].term, 2);
+        assert_eq!(stored[3].term, 2);
+    }
+
+    #[test]
+    fn test_wl_append_entries_empty_slice() {
+        let storage = MemStorage::new();
+
+        // Add initial entries
+        let entries1 = vec![
+            Entry {
+                index: 1,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 2,
+                term: 1,
+                ..Default::default()
+            },
+        ];
+        storage.wl_append_entries(&entries1).unwrap();
+
+        // Append empty slice (should be no-op)
+        let empty: Vec<Entry> = vec![];
+        let result = storage.wl_append_entries(&empty);
+        assert!(result.is_ok(), "Empty append should succeed");
+
+        // Verify nothing changed
+        assert_eq!(storage.last_index().unwrap(), 2);
+        let stored = storage.entries.read().unwrap();
+        assert_eq!(stored.len(), 2);
+    }
+
+    #[test]
+    fn test_wl_append_entries_before_existing_log() {
+        let storage = MemStorage::new();
+
+        // Add entries starting at index 10
+        let entries1 = vec![
+            Entry {
+                index: 10,
+                term: 2,
+                ..Default::default()
+            },
+            Entry {
+                index: 11,
+                term: 2,
+                ..Default::default()
+            },
+        ];
+        storage.wl_append_entries(&entries1).unwrap();
+
+        // Append entries starting at index 1 (before existing log)
+        let entries2 = vec![
+            Entry {
+                index: 1,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 2,
+                term: 1,
+                ..Default::default()
+            },
+        ];
+        storage.wl_append_entries(&entries2).unwrap();
+
+        // Should replace entire log
+        let stored = storage.entries.read().unwrap();
+        assert_eq!(stored.len(), 2);
+        assert_eq!(stored[0].index, 1);
+        assert_eq!(stored[1].index, 2);
+    }
+
+    #[test]
+    fn test_wl_append_entries_thread_safety() {
+        let storage = Arc::new(MemStorage::new());
+
+        // Start with some initial entries using the helper method
+        storage.append(&[
+            Entry {
+                index: 1,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 2,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 3,
+                term: 1,
+                ..Default::default()
+            },
+        ]);
+
+        // Spawn multiple threads all appending the same extension
+        // This tests that concurrent writes are properly serialized by the write lock
+        let handles: Vec<_> = (0..10)
+            .map(|_| {
+                let storage_clone = Arc::clone(&storage);
+                thread::spawn(move || {
+                    // All threads try to append entries 4 and 5
+                    let entries = vec![
+                        Entry {
+                            index: 4,
+                            term: 2,
+                            ..Default::default()
+                        },
+                        Entry {
+                            index: 5,
+                            term: 2,
+                            ..Default::default()
+                        },
+                    ];
+                    storage_clone.wl_append_entries(&entries).unwrap();
+                })
+            })
+            .collect();
+
+        // Wait for all threads
+        for handle in handles {
+            handle.join().expect("Thread should not panic");
+        }
+
+        // Verify final state is consistent - should have entries 1-5, no corruption
+        let stored = storage.entries.read().unwrap();
+        assert_eq!(stored.len(), 5, "Should have exactly 5 entries");
+        assert_eq!(stored[0].index, 1);
+        assert_eq!(stored[3].index, 4);
+        assert_eq!(stored[4].index, 5);
+        assert_eq!(stored[3].term, 2);
+        assert_eq!(stored[4].term, 2);
+
+        // Verify indices are contiguous
+        for i in 1..stored.len() {
+            assert_eq!(
+                stored[i].index,
+                stored[i - 1].index + 1,
+                "Indices should be contiguous"
+            );
+        }
+    }
+
+    #[test]
+    fn test_wl_append_entries_complex_conflict_resolution() {
+        let storage = MemStorage::new();
+
+        // Build log: [1:1, 2:1, 3:1, 4:2, 5:2]
+        let entries1 = vec![
+            Entry {
+                index: 1,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 2,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 3,
+                term: 1,
+                ..Default::default()
+            },
+            Entry {
+                index: 4,
+                term: 2,
+                ..Default::default()
+            },
+            Entry {
+                index: 5,
+                term: 2,
+                ..Default::default()
+            },
+        ];
+        storage.wl_append_entries(&entries1).unwrap();
+
+        // Conflict at index 3: [3:3, 4:3, 5:3, 6:3]
+        let entries2 = vec![
+            Entry {
+                index: 3,
+                term: 3,
+                ..Default::default()
+            },
+            Entry {
+                index: 4,
+                term: 3,
+                ..Default::default()
+            },
+            Entry {
+                index: 5,
+                term: 3,
+                ..Default::default()
+            },
+            Entry {
+                index: 6,
+                term: 3,
+                ..Default::default()
+            },
+        ];
+        storage.wl_append_entries(&entries2).unwrap();
+
+        // Should have: [1:1, 2:1, 3:3, 4:3, 5:3, 6:3]
+        let stored = storage.entries.read().unwrap();
+        assert_eq!(stored.len(), 6);
+        assert_eq!(stored[0].index, 1);
+        assert_eq!(stored[0].term, 1);
+        assert_eq!(stored[1].index, 2);
+        assert_eq!(stored[1].term, 1);
+        assert_eq!(stored[2].index, 3);
+        assert_eq!(stored[2].term, 3);
+        assert_eq!(stored[3].index, 4);
+        assert_eq!(stored[3].term, 3);
+        assert_eq!(stored[4].index, 5);
+        assert_eq!(stored[4].term, 3);
+        assert_eq!(stored[5].index, 6);
+        assert_eq!(stored[5].term, 3);
     }
 }

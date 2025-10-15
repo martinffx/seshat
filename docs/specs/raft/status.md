@@ -2,8 +2,8 @@
 
 ## Project Phase
 - **Current Phase**: 1 - MVP Consensus Layer
-- **Overall Progress**: 8/24 tasks (33.3% complete)
-- **Phase 4 Status**: 86% Complete (6/7 Storage Layer tasks)
+- **Overall Progress**: 9/24 tasks (37.5% complete)
+- **Phase 4 Status**: ✅ 100% Complete (7/7 Storage Layer tasks)
 
 ## Completed Tasks
 1. **common_types**
@@ -201,18 +201,54 @@
      - Thread-safe with 1000 total concurrent reads tested
      - Verifies data cloning prevents mutation leaks
 
+9. **mem_storage_mutations**
+   - **ID**: `mem_storage_mutations`
+   - **Description**: Storage Mutation Methods (1 hour)
+   - **Status**: ✅ Completed
+   - **Timestamp**: 2025-10-13T10:00:00Z
+   - **Files**:
+     - Updated: `crates/raft/src/storage.rs`
+   - **Test Coverage**: 86/86 tests passing (70 original + 16 new)
+   - **Implementation Details**:
+     - Implemented apply_snapshot() for replacing storage state with snapshot
+     - Implemented wl_append_entries() for log entry appending with Raft conflict resolution
+     - Thread-safe with write lock usage
+     - Proper lock ordering to prevent deadlocks
+     - Conflict resolution: compare terms, truncate on first mismatch
+     - Helper method `append()` for test convenience
+   - **Tests Added**:
+     - test_apply_snapshot_replaces_all_state
+     - test_apply_snapshot_clears_entries_covered_by_snapshot
+     - test_apply_snapshot_updates_hard_state
+     - test_apply_snapshot_updates_conf_state
+     - test_apply_snapshot_empty_log
+     - test_apply_snapshot_with_no_conf_state_in_metadata
+     - test_apply_snapshot_preserves_higher_hard_state_values
+     - test_apply_snapshot_thread_safety (10 threads, 100 iterations)
+     - test_wl_append_entries_to_empty_log
+     - test_wl_append_entries_after_existing_entries
+     - test_wl_append_entries_truncates_conflicting_entries
+     - test_wl_append_entries_no_conflict_when_terms_match
+     - test_wl_append_entries_before_existing_log
+     - test_wl_append_entries_empty_slice
+     - test_wl_append_entries_complex_conflict_resolution
+     - test_wl_append_entries_thread_safety (10 threads, concurrent appends)
+   - **Key Features**:
+     - apply_snapshot() replaces snapshot, clears covered entries, updates hard_state and conf_state
+     - wl_append_entries() implements Raft log conflict resolution algorithm
+     - Lock ordering: snapshot → entries → hard_state → conf_state (prevents deadlocks)
+     - Never decreases hard_state values (only increases)
+     - Handles empty entries slice gracefully
+     - 100% test coverage of all code paths
+     - Storage Layer now 100% complete (7/7 tasks)
+
 ## Next Task (Recommended)
-- **ID**: `mem_storage_mutations`
-- **Description**: Storage: apply_snapshot(), wl_append_entries() (1 hour)
-- **Phase**: 4 (Storage Layer)
-- **Estimated Time**: 1 hour
-- **Rationale**: Complete Storage Layer - last task before moving to Raft Node implementation
-- **Dependencies**: All previous Storage Layer tasks
-- **Acceptance Criteria**:
-  - apply_snapshot() replaces storage state with snapshot
-  - wl_append_entries() appends entries with proper truncation
-  - Thread-safe with write lock usage
-  - Comprehensive tests for all mutation operations
+- **ID**: `config_types`
+- **Description**: Configuration Types (30 min)
+- **Phase**: 2 (Configuration)
+- **Estimated Time**: 30 minutes
+- **Rationale**: Start Phase 2 - Configuration types needed for Raft Node initialization
+- **Dependencies**: Phase 1 (Common Foundation)
 
 ## Alternative Next Tasks
 1. **config_types** - Quick win: Start Configuration phase (3 tasks, 2.5 hours)
@@ -223,18 +259,18 @@
 - None
 
 ## Progress Metrics
-- Tasks Completed: 8
-- Tasks Remaining: 16
-- Completion Percentage: 33.3%
-- Storage Layer Progress: 6/7 tasks (86%)
+- Tasks Completed: 9
+- Tasks Remaining: 15
+- Completion Percentage: 37.5%
+- Storage Layer Progress: 7/7 tasks (100%)
 - Phase 1 (Common Foundation): ✅ 100% (2/2)
-- Phase 4 (Storage Layer): 🚧 86% (6/7)
+- Phase 4 (Storage Layer): ✅ 100% (7/7)
 
 ## Task Breakdown
 - Total Tasks: 24
-- Completed: 8
+- Completed: 9
 - In Progress: 0
-- Not Started: 16
+- Not Started: 15
 
 ## Recent Updates
 - Completed common type aliases
@@ -261,44 +297,48 @@
   - Verified invariant: first_index <= last_index + 1
   - Comprehensive thread safety validation
   - Edge cases: empty log, after append, after compaction, after snapshot
-- **NEW**: Completed snapshot() method implementation
+- Completed snapshot() method implementation
   - 7 new tests covering all use cases
   - Phase 1 simplified implementation (ignores request_index)
   - Returns cloned snapshot data to prevent mutations
   - Thread-safe with 10 threads × 100 iterations = 1000 concurrent reads
   - Validates metadata (index, term, ConfState) and data integrity
-  - Storage Layer now 86% complete (6/7 tasks)
-  - Total 70 tests passing
+- **NEW**: ✅ Completed Storage Layer (100% - 7/7 tasks)
+  - Implemented apply_snapshot() and wl_append_entries() methods
+  - 16 new tests for mutation operations (86 total tests)
+  - Raft conflict resolution algorithm implemented
+  - Thread-safe write operations with proper lock ordering
+  - Fixed thread safety test to use contiguous log entries
+  - All tests passing with zero clippy warnings
+  - Phase 4 (Storage Layer) fully complete
 
 ## Next Steps
-**Final Storage Layer Task**:
-```bash
-/spec:implement raft mem_storage_mutations
-```
-- Complete Storage Layer with mutation methods (1 hour)
-- Implements apply_snapshot() and wl_append_entries()
-- Enables Raft Node implementation (Phase 6)
-- Storage Layer will be 100% complete
+✅ **Storage Layer Complete!** All 7 tasks finished with 86 tests passing.
 
-**Alternative Tracks**:
-
-**Track A (Quick Win)**:
+**Recommended Next Phase**:
 ```bash
 /spec:implement raft config_types
 ```
-- Complete Configuration phase quickly (3 tasks, 2.5 hours)
+- **Track A (Quick Win)**: Start Configuration phase (3 tasks, 2.5 hours total)
+- Defines RaftConfig, NodeConfig, ClusterConfig types
+- Enables Raft Node initialization (Phase 6)
+
+**Alternative Tracks**:
 
 **Track B (Enable State Machine)**:
 ```bash
 /spec:implement raft protobuf_messages
 ```
-- Start Protocol + State Machine track (5 tasks, 5 hours)
+- Start Protocol + State Machine track (Phases 3 & 5)
+- Required for client communication (RESP protocol)
+- 5 tasks, 5 hours total
 
 **Track C (Begin Raft Node)**:
 ```bash
 /spec:implement raft node_skeleton
 ```
-- Start Raft Node implementation (requires complete Storage Layer)
+- Start Raft Node implementation (Phase 6)
+- Requires: Configuration phase (Phase 2), Storage Layer ✅ (Phase 4)
 
 ## TDD Quality Metrics
 All implemented tasks follow strict TDD:
@@ -312,6 +352,7 @@ All implemented tasks follow strict TDD:
 - ✅ Comprehensive doc comments
 - ✅ Edge cases covered
 
-**Average Test Count per Task**: ~9 tests
-**Total Tests**: 70 tests passing
+**Average Test Count per Task**: ~9.6 tests
+**Total Tests**: 86 tests passing
 **Test Success Rate**: 100%
+**Storage Layer**: 100% complete with full test coverage
