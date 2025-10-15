@@ -13,3 +13,7 @@ seshat-common = { path = "../common" }
 raft = { version = "0.7", default-features = false, features = ["prost-codec"] }
 prost = "0.11"
 tokio = { version = "1", features = ["full"] }
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"

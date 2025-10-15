@@ -4,9 +4,11 @@
 //! `raft-rs`, with custom storage backends and integration with Seshat's
 //! architecture.
 
+pub mod config;
 pub mod storage;
 
 // Re-export main types for convenience
+pub use config::{ClusterConfig, InitialMember, NodeConfig, RaftConfig};
 pub use storage::MemStorage;
 
 pub fn add(left: u64, right: u64) -> u64 {

@@ -1389,7 +1389,7 @@ mod tests {
             raft::Error::Store(StorageError::Compacted) => {
                 // Expected error
             }
-            other => panic!("Expected StorageError::Compacted, got {:?}", other),
+            other => panic!("Expected StorageError::Compacted, got {other:?}"),
         }
     }
 
@@ -1425,7 +1425,7 @@ mod tests {
             raft::Error::Store(StorageError::Unavailable) => {
                 // Expected error
             }
-            other => panic!("Expected StorageError::Unavailable, got {:?}", other),
+            other => panic!("Expected StorageError::Unavailable, got {other:?}"),
         }
     }
 
@@ -1484,7 +1484,7 @@ mod tests {
             raft::Error::Store(StorageError::Unavailable) => {
                 // Expected
             }
-            other => panic!("Expected StorageError::Unavailable, got {:?}", other),
+            other => panic!("Expected StorageError::Unavailable, got {other:?}"),
         }
     }
 
@@ -1663,7 +1663,7 @@ mod tests {
             raft::Error::Store(StorageError::Compacted) => {
                 // Expected error
             }
-            other => panic!("Expected StorageError::Compacted, got {:?}", other),
+            other => panic!("Expected StorageError::Compacted, got {other:?}"),
         }
     }
 
@@ -1699,7 +1699,7 @@ mod tests {
             raft::Error::Store(StorageError::Unavailable) => {
                 // Expected error
             }
-            other => panic!("Expected StorageError::Unavailable, got {:?}", other),
+            other => panic!("Expected StorageError::Unavailable, got {other:?}"),
         }
     }
 
@@ -1718,7 +1718,7 @@ mod tests {
             raft::Error::Store(StorageError::Unavailable) => {
                 // Expected
             }
-            other => panic!("Expected StorageError::Unavailable, got {:?}", other),
+            other => panic!("Expected StorageError::Unavailable, got {other:?}"),
         }
     }
 
@@ -1799,7 +1799,7 @@ mod tests {
             raft::Error::Store(StorageError::Unavailable) => {
                 // Expected
             }
-            other => panic!("Expected StorageError::Unavailable, got {:?}", other),
+            other => panic!("Expected StorageError::Unavailable, got {other:?}"),
         }
     }
 
@@ -1832,7 +1832,7 @@ mod tests {
             raft::Error::Store(StorageError::Compacted) => {
                 // Expected
             }
-            other => panic!("Expected StorageError::Compacted, got {:?}", other),
+            other => panic!("Expected StorageError::Compacted, got {other:?}"),
         }
 
         // Indices after snapshot should be unavailable
@@ -1845,7 +1845,7 @@ mod tests {
             raft::Error::Store(StorageError::Unavailable) => {
                 // Expected
             }
-            other => panic!("Expected StorageError::Unavailable, got {:?}", other),
+            other => panic!("Expected StorageError::Unavailable, got {other:?}"),
         }
     }
 
@@ -2226,9 +2226,7 @@ mod tests {
         let last = storage.last_index().unwrap();
         assert!(
             first <= last + 1,
-            "Empty log: first_index ({}) <= last_index ({}) + 1",
-            first,
-            last
+            "Empty log: first_index ({first}) <= last_index ({last}) + 1"
         );
 
         // Case 2: After appending entries
@@ -2255,9 +2253,7 @@ mod tests {
         let last = storage.last_index().unwrap();
         assert!(
             first <= last + 1,
-            "With entries: first_index ({}) <= last_index ({}) + 1",
-            first,
-            last
+            "With entries: first_index ({first}) <= last_index ({last}) + 1"
         );
 
         // Case 3: With snapshot (need to clear old entries to simulate proper compaction)
@@ -2272,9 +2268,7 @@ mod tests {
         let last = storage.last_index().unwrap();
         assert!(
             first <= last + 1,
-            "With snapshot: first_index ({}) <= last_index ({}) + 1",
-            first,
-            last
+            "With snapshot: first_index ({first}) <= last_index ({last}) + 1"
         );
 
         // Case 4: With snapshot and new entries
@@ -2296,9 +2290,7 @@ mod tests {
         let last = storage.last_index().unwrap();
         assert!(
             first <= last + 1,
-            "With snapshot and entries: first_index ({}) <= last_index ({}) + 1",
-            first,
-            last
+            "With snapshot and entries: first_index ({first}) <= last_index ({last}) + 1"
         );
     }
 
@@ -2623,8 +2615,19 @@ mod tests {
         let retrieved = storage.snapshot(0).unwrap();
         assert_eq!(retrieved.get_metadata().index, 42);
         assert_eq!(retrieved.get_metadata().term, 7);
-        assert_eq!(retrieved.get_metadata().conf_state.as_ref().unwrap().voters, vec![1, 2, 3]);
-        assert_eq!(retrieved.get_metadata().conf_state.as_ref().unwrap().learners, vec![4, 5]);
+        assert_eq!(
+            retrieved.get_metadata().conf_state.as_ref().unwrap().voters,
+            vec![1, 2, 3]
+        );
+        assert_eq!(
+            retrieved
+                .get_metadata()
+                .conf_state
+                .as_ref()
+                .unwrap()
+                .learners,
+            vec![4, 5]
+        );
     }
 
     #[test]
@@ -2671,14 +2674,38 @@ mod tests {
         let snap2 = storage.snapshot(0).unwrap();
 
         // Verify snap1 is unaffected by later changes
-        assert_eq!(snap1.get_metadata().index, 5, "First snapshot should be unaffected");
-        assert_eq!(snap1.get_metadata().term, 2, "First snapshot term should be unaffected");
-        assert_eq!(snap1.data, vec![1, 2, 3], "First snapshot data should be unaffected");
+        assert_eq!(
+            snap1.get_metadata().index,
+            5,
+            "First snapshot should be unaffected"
+        );
+        assert_eq!(
+            snap1.get_metadata().term,
+            2,
+            "First snapshot term should be unaffected"
+        );
+        assert_eq!(
+            snap1.data,
+            vec![1, 2, 3],
+            "First snapshot data should be unaffected"
+        );
 
         // Verify snap2 has new values
-        assert_eq!(snap2.get_metadata().index, 10, "Second snapshot should have new values");
-        assert_eq!(snap2.get_metadata().term, 5, "Second snapshot should have new term");
-        assert_eq!(snap2.data, vec![4, 5, 6], "Second snapshot should have new data");
+        assert_eq!(
+            snap2.get_metadata().index,
+            10,
+            "Second snapshot should have new values"
+        );
+        assert_eq!(
+            snap2.get_metadata().term,
+            5,
+            "Second snapshot should have new term"
+        );
+        assert_eq!(
+            snap2.data,
+            vec![4, 5, 6],
+            "Second snapshot should have new data"
+        );
     }
 
     #[test]
@@ -2808,8 +2835,15 @@ mod tests {
 
         // Only entries 6-10 should remain
         let remaining = storage.entries.read().unwrap();
-        assert_eq!(remaining.len(), 5, "Only entries after snapshot should remain");
-        assert_eq!(remaining[0].index, 6, "First remaining entry should be index 6");
+        assert_eq!(
+            remaining.len(),
+            5,
+            "Only entries after snapshot should remain"
+        );
+        assert_eq!(
+            remaining[0].index, 6,
+            "First remaining entry should be index 6"
+        );
         assert_eq!(
             remaining[4].index, 10,
             "Last remaining entry should be index 10"
@@ -2866,14 +2900,8 @@ mod tests {
 
         // Verify higher values were preserved
         let hard_state = storage.hard_state.read().unwrap();
-        assert_eq!(
-            hard_state.term, 10,
-            "Higher term should be preserved"
-        );
-        assert_eq!(
-            hard_state.commit, 20,
-            "Higher commit should be preserved"
-        );
+        assert_eq!(hard_state.term, 10, "Higher term should be preserved");
+        assert_eq!(hard_state.commit, 20, "Higher commit should be preserved");
     }
 
     #[test]

@@ -9,3 +9,13 @@ description.workspace = true
 keywords.workspace = true
 
 [dependencies]
+tonic = { workspace = true }
+prost = { workspace = true }
+bytes = { workspace = true }
+serde = { workspace = true }
+
+[build-dependencies]
+tonic-build = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }
