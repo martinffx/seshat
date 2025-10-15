@@ -9,3 +9,5 @@ description.workspace = true
 keywords.workspace = true
 
 [dependencies]
+bytes = "1.5"
+thiserror = "1.0"

@@ -1,0 +1,1130 @@
+{
+  "feature": "resp",
+  "description": "RESP3 Protocol Implementation - Streaming parser, encoder, and Tokio codec integration",
+  "architecture_note": "Protocol layer (not domain service) - Dependencies: types → parser/encoder → codec → command",
+  "phases": {
+    "foundation": {
+      "name": "Foundation (Error & Types)",
+      "description": "Core error handling and RESP3 type definitions with no dependencies",
+      "dependencies": [],
+      "estimated_duration": "4-6 hours",
+      "tasks": ["error_types", "resp_value_types", "resp_value_helpers"]
+    },
+    "core_protocol": {
+      "name": "Core Protocol (Parser & Encoder)",
+      "description": "Streaming state machine parser and serializer implementation",
+      "dependencies": ["foundation"],
+      "estimated_duration": "10-14 hours",
+      "tasks": ["parser_simple_types", "parser_bulk_string", "parser_array", "parser_resp3_types", "encoder_basic", "encoder_resp3", "inline_parser"]
+    },
+    "integration": {
+      "name": "Integration (Codec & Commands)",
+      "description": "Tokio codec integration and Redis command parsing",
+      "dependencies": ["core_protocol"],
+      "estimated_duration": "6-8 hours",
+      "tasks": ["tokio_codec", "command_parser", "buffer_pool"]
+    },
+    "testing_validation": {
+      "name": "Testing & Validation",
+      "description": "Comprehensive test suite with property tests, integration tests, and benchmarks",
+      "dependencies": ["integration"],
+      "estimated_duration": "8-10 hours",
+      "tasks": ["property_tests", "integration_tests", "codec_integration_tests", "benchmarks"]
+    }
+  },
+  "tasks": {
+    "error_types": {
+      "id": "error_types",
+      "title": "Implement ProtocolError types with thiserror",
+      "phase": "foundation",
+      "order": 1,
+      "file": "crates/protocol/src/error.rs",
+      "description": "Define comprehensive protocol error types using thiserror for parsing, encoding, and command validation errors",
+      "acceptance_criteria": [
+        "ProtocolError enum with 12+ variants covering all error cases",
+        "Error messages are descriptive with context (sizes, limits, commands)",
+        "Implements std::error::Error via thiserror derive macro",
+        "From implementations for std::io::Error and std::str::Utf8Error",
+        "Result type alias for convenience"
+      ],
+      "tdd_steps": [
+        {
+          "step": "test",
+          "description": "Write tests for error type construction, Display formatting, and error context",
+          "details": [
+            "Test InvalidTypeMarker error shows hex value",
+            "Test BulkStringTooLarge shows size and max",
+            "Test WrongArity shows command, expected, and got",
+            "Test error conversion from io::Error and Utf8Error"
+          ],
+          "estimated_time": "20min"
+        },
+        {
+          "step": "implement",
+          "description": "Implement ProtocolError enum with thiserror",
+          "details": [
+            "InvalidTypeMarker(u8) - unknown RESP type byte",
+            "InvalidLength - malformed length string",
+            "BulkStringTooLarge { size, max } - exceeds limit",
+            "ArrayTooLarge { size, max } - exceeds element limit",
+            "NestingTooDeep - exceeds depth limit",
+            "ExpectedArray - command must be array",
+            "EmptyCommand - no command name",
+            "InvalidCommandName - command name not string",
+            "InvalidKey - key parameter not string",
+            "InvalidValue - value parameter not string",
+            "WrongArity { command, expected, got } - wrong arg count",
+            "UnknownCommand { command } - unsupported command",
+            "Io(#[from] std::io::Error) - I/O errors",
+            "Utf8(#[from] std::str::Utf8Error) - UTF-8 decode errors"
+          ],
+          "estimated_time": "30min"
+        },
+        {
+          "step": "refactor",
+          "description": "Review error messages for clarity and add documentation",
+          "details": [
+            "Ensure all error messages are actionable",
+            "Add doc comments explaining when each error occurs",
+            "Verify error context is sufficient for debugging"
+          ],
+          "estimated_time": "15min"
+        }
+      ],
+      "dependencies": [],
+      "estimated_total": "65min"
+    },
+    "resp_value_types": {
+      "id": "resp_value_types",
+      "title": "Implement RespValue enum with all 14 RESP3 types",
+      "phase": "foundation",
+      "order": 2,
+      "file": "crates/protocol/src/types.rs",
+      "description": "Define RespValue enum covering all 14 RESP3 data types using bytes::Bytes for zero-copy efficiency",
+      "acceptance_criteria": [
+        "RespValue enum with 14 variants (5 RESP2 + 9 RESP3)",
+        "Uses bytes::Bytes for string data (zero-copy)",
+        "Implements Debug, Clone, PartialEq traits",
+        "All types properly model RESP3 specification",
+        "VerbatimString includes format field ([u8; 3])",
+        "Map and Set use Vec for ordering preservation"
+      ],
+      "tdd_steps": [
+        {
+          "step": "test",
+          "description": "Write tests for RespValue construction and equality",
+          "details": [
+            "Test creating each of the 14 types",
+            "Test equality comparison works correctly",
+            "Test clone works for all types",
+            "Test Debug formatting is readable"
+          ],
+          "estimated_time": "30min"
+        },
+        {
+          "step": "implement",
+          "description": "Implement RespValue enum with all 14 RESP3 types",
+          "details": [
+            "RESP2 types: SimpleString(Bytes), Error(Bytes), Integer(i64), BulkString(Option<Bytes>), Array(Option<Vec<RespValue>>)",
+            "RESP3 types: Null, Boolean(bool), Double(f64), BigNumber(Bytes), BulkError(Bytes)",
+            "RESP3 complex: VerbatimString { format: [u8; 3], data: Bytes }",
+            "RESP3 collections: Map(Vec<(RespValue, RespValue)>), Set(Vec<RespValue>), Push(Vec<RespValue>)",
+            "Derive Debug, Clone, PartialEq"
+          ],
+          "estimated_time": "45min"
+        },
+        {
+          "step": "refactor",
+          "description": "Add documentation and optimize type layout",
+          "details": [
+            "Add doc comments for each variant with RESP3 format examples",
+            "Consider enum size optimization if needed",
+            "Group related types logically"
+          ],
+          "estimated_time": "20min"
+        }
+      ],
+      "dependencies": [],
+      "estimated_total": "95min"
+    },
+    "resp_value_helpers": {
+      "id": "resp_value_helpers",
+      "title": "Implement RespValue helper methods",
+      "phase": "foundation",
+      "order": 3,
+      "file": "crates/protocol/src/types.rs",
+      "description": "Add convenience methods to RespValue for common operations like null checking, type extraction, and size estimation",
+      "acceptance_criteria": [
+        "is_null() returns true for all null representations",
+        "as_bytes() extracts byte data from string types",
+        "as_integer() extracts integer value",
+        "into_array() consumes and returns array elements",
+        "size_estimate() calculates approximate wire size",
+        "All methods have comprehensive tests"
+      ],
+      "tdd_steps": [
+        {
+          "step": "test",
+          "description": "Write tests for all helper methods",
+          "details": [
+            "Test is_null() for Null, BulkString(None), Array(None)",
+            "Test as_bytes() for SimpleString and BulkString(Some)",
+            "Test as_integer() extracts Integer value",
+            "Test into_array() consumes array and returns elements",
+            "Test size_estimate() for various types (strings, arrays, maps)",
+            "Test methods return None/default for wrong types"
+          ],
+          "estimated_time": "30min"
+        },
+        {
+          "step": "implement",
+          "description": "Implement helper methods on RespValue",
+          "details": [
+            "is_null() - matches!(Null | BulkString(None) | Array(None))",
+            "as_bytes() - returns Option<&Bytes> for string types",
+            "as_integer() - returns Option<i64> for Integer",
+            "into_array() - returns Option<Vec<RespValue>> consuming self",
+            "size_estimate() - recursive calculation for nested types"
+          ],
+          "estimated_time": "40min"
+        },
+        {
+          "step": "refactor",
+          "description": "Optimize implementations and add documentation",
+          "details": [
+            "Add doc comments with usage examples",
+            "Optimize size_estimate() for common cases",
+            "Consider additional helper methods if useful"
+          ],
+          "estimated_time": "15min"
+        }
+      ],
+      "dependencies": ["resp_value_types"],
+      "estimated_total": "85min"
+    },
+    "parser_simple_types": {
+      "id": "parser_simple_types",
+      "title": "Implement parser for simple RESP types (SimpleString, Error, Integer, Null, Boolean)",
+      "phase": "core_protocol",
+      "order": 4,
+      "file": "crates/protocol/src/parser.rs",
+      "description": "Implement streaming state machine parser for simple RESP3 types that don't require length prefixes",
+      "acceptance_criteria": [
+        "RespParser struct with ParseState enum",
+        "Parses SimpleString (+...\\r\\n)",
+        "Parses Error (-...\\r\\n)",
+        "Parses Integer (:123\\r\\n)",
+        "Parses Null (_\\r\\n)",
+        "Parses Boolean (#t\\r\\n and #f\\r\\n)",
+        "Handles incomplete data (returns Ok(None))",
+        "Returns errors for malformed input"
+      ],
+      "tdd_steps": [
+        {
+          "step": "test",
+          "description": "Write tests for simple type parsing",
+          "details": [
+            "Test parse complete SimpleString: +OK\\r\\n",
+            "Test parse complete Error: -ERR message\\r\\n",
+            "Test parse Integer: :42\\r\\n and :-100\\r\\n",
+            "Test parse Null: _\\r\\n",
+            "Test parse Boolean: #t\\r\\n and #f\\r\\n",
+            "Test incomplete data returns Ok(None)",
+            "Test invalid type marker returns error",
+            "Test malformed integer returns error"
+          ],
+          "estimated_time": "45min"
+        },
+        {
+          "step": "implement",
+          "description": "Implement RespParser with state machine for simple types",
+          "details": [
+            "Define RespParser struct with ParseState enum",
+            "Implement parse() method with state machine loop",
+            "States: WaitingForType, SimpleString, Error, Integer",
+            "Use find_crlf() helper to locate terminators",
+            "Handle type byte dispatching ('+', '-', ':', '_', '#')",
+            "Accumulate data until \\r\\n found",
+            "Return parsed value and reset state"
+          ],
+          "estimated_time": "90min"
+        },
+        {
+          "step": "refactor",
+          "description": "Clean up state machine logic and add error handling",
+          "details": [
+            "Extract common patterns into helper methods",
+            "Ensure all state transitions are correct",
+            "Add comprehensive error messages",
+            "Document state machine behavior"
+          ],
+          "estimated_time": "30min"
+        }
+      ],
+      "dependencies": ["error_types", "resp_value_types"],
+      "estimated_total": "165min"
+    },
+    "parser_bulk_string": {
+      "id": "parser_bulk_string",
+      "title": "Implement parser for BulkString with length prefix and size limits",
+      "phase": "core_protocol",
+      "order": 5,
+      "file": "crates/protocol/src/parser.rs",
+      "description": "Add BulkString parsing to state machine with configurable size limits and null handling",
+      "acceptance_criteria": [
+        "Parses BulkString: $5\\r\\nhello\\r\\n",
+        "Handles null BulkString: $-1\\r\\n",
+        "Enforces max_bulk_size limit (default 512 MB)",
+        "Handles incomplete length line",
+        "Handles incomplete data section",
+        "Returns BulkStringTooLarge error when exceeding limit",
+        "Zero-copy using bytes::Bytes"
+      ],
+      "tdd_steps": [
+        {
+          "step": "test",
+          "description": "Write tests for BulkString parsing scenarios",
+          "details": [
+            "Test parse complete BulkString: $5\\r\\nhello\\r\\n",
+            "Test parse null BulkString: $-1\\r\\n",
+            "Test parse empty BulkString: $0\\r\\n\\r\\n",
+            "Test incomplete length returns Ok(None)",
+            "Test incomplete data returns Ok(None)",
+            "Test invalid length (negative non-null) returns error",
+            "Test size limit enforcement",
+            "Test continue parsing after receiving more data"
+          ],
+          "estimated_time": "50min"
+        },
+        {
+          "step": "implement",
+          "description": "Add BulkString states and parsing logic",
+          "details": [
+            "Add ParseState::BulkStringLen and BulkStringData variants",
+            "Add max_bulk_size field to RespParser (default 512 MB)",
+            "Add with_max_bulk_size() builder method",
+            "Parse length line until \\r\\n",
+            "Handle $-1 as null",
+            "Check size against max_bulk_size",
+            "Accumulate data bytes (len + 2 for \\r\\n)",
+            "Verify \\r\\n terminator",
+            "Return BulkString(Some(bytes.freeze()))"
+          ],
+          "estimated_time": "90min"
+        },
+        {
+          "step": "refactor",
+          "description": "Optimize data accumulation and error handling",
+          "details": [
+            "Ensure minimal copying using BytesMut",
+            "Pre-allocate BytesMut with capacity",
+            "Improve error messages with context",
+            "Add inline documentation for states"
+          ],
+          "estimated_time": "30min"
+        }
+      ],
+      "dependencies": ["parser_simple_types"],
+      "estimated_total": "170min"
+    },
+    "parser_array": {
+      "id": "parser_array",
+      "title": "Implement recursive array parser with nesting depth limits",
+      "phase": "core_protocol",
+      "order": 6,
+      "file": "crates/protocol/src/parser.rs",
+      "description": "Add Array parsing with recursive element parsing and configurable depth limits",
+      "acceptance_criteria": [
+        "Parses Array: *2\\r\\n$3\\r\\nGET\\r\\n$3\\r\\nkey\\r\\n",
+        "Handles null Array: *-1\\r\\n",
+        "Handles empty Array: *0\\r\\n",
+        "Recursive parsing of nested arrays",
+        "Enforces max_array_len limit (default 1M elements)",
+        "Enforces max_depth limit (default 32 levels)",
+        "Handles incomplete array elements"
+      ],
+      "tdd_steps": [
+        {
+          "step": "test",
+          "description": "Write tests for array parsing scenarios",
+          "details": [
+            "Test parse simple array: *2\\r\\n:1\\r\\n:2\\r\\n",
+            "Test parse null array: *-1\\r\\n",
+            "Test parse empty array: *0\\r\\n",
+            "Test parse array of bulk strings",
+            "Test parse nested arrays (2-3 levels)",
+            "Test incomplete array returns Ok(None)",
+            "Test array size limit enforcement",
+            "Test nesting depth limit enforcement"
+          ],
+          "estimated_time": "60min"
+        },
+        {
+          "step": "implement",
+          "description": "Add Array states and recursive parsing logic",
+          "details": [
+            "Add ParseState::ArrayLen and ArrayData variants",
+            "Add max_array_len and max_depth fields to RespParser",
+            "Add current_depth tracking",
+            "Parse array length until \\r\\n",
+            "Handle *-1 as null",
+            "Check length against max_array_len",
+            "Recursively call parse() for each element",
+            "Track current_depth and check against max_depth",
+            "Build Vec<RespValue> as elements are parsed",
+            "Return complete array when all elements parsed"
+          ],
+          "estimated_time": "120min"
+        },
+        {
+          "step": "refactor",
+          "description": "Optimize recursion and improve error handling",
+          "details": [
+            "Pre-allocate Vec with capacity",
+            "Ensure depth counter increments/decrements correctly",
+            "Add clear error messages for limits",
+            "Consider iterative parsing for better stack usage (future optimization)"
+          ],
+          "estimated_time": "30min"
+        }
+      ],
+      "dependencies": ["parser_bulk_string"],
+      "estimated_total": "210min"
+    },
+    "parser_resp3_types": {
+      "id": "parser_resp3_types",
+      "title": "Implement parser for additional RESP3 types (Double, BigNumber, Map, Set, etc.)",
+      "phase": "core_protocol",
+      "order": 7,
+      "file": "crates/protocol/src/parser.rs",
+      "description": "Complete parser by adding all remaining RESP3-specific types",
+      "acceptance_criteria": [
+        "Parses Double: ,1.23\\r\\n, inf, -inf, nan",
+        "Parses BigNumber: (3492890...\\r\\n",
+        "Parses BulkError: !21\\r\\nSYNTAX error\\r\\n",
+        "Parses VerbatimString: =15\\r\\ntxt:Some string\\r\\n",
+        "Parses Map: %2\\r\\n+key1\\r\\n:1\\r\\n+key2\\r\\n:2\\r\\n",
+        "Parses Set: ~3\\r\\n+a\\r\\n+b\\r\\n+c\\r\\n",
+        "Parses Push: >4\\r\\n+pubsub\\r\\n...",
+        "All types integrated into state machine"
+      ],
+      "tdd_steps": [
+        {
+          "step": "test",
+          "description": "Write tests for each RESP3 type",
+          "details": [
+            "Test parse Double with normal, inf, -inf, nan values",
+            "Test parse BigNumber with large integer string",
+            "Test parse BulkError with length and error message",
+            "Test parse VerbatimString with format field",
+            "Test parse Map with multiple key-value pairs",
+            "Test parse Set with multiple elements",
+            "Test parse Push with array-like structure",
+            "Test incomplete data handling for each type"
+          ],
+          "estimated_time": "60min"
+        },
+        {
+          "step": "implement",
+          "description": "Add remaining RESP3 type parsing to state machine",
+          "details": [
+            "Add type byte handlers: ',' (Double), '(' (BigNumber), '!' (BulkError)",
+            "Add type byte handlers: '=' (VerbatimString), '%' (Map), '~' (Set), '>' (Push)",
+            "Double: parse numeric string, handle special values",
+            "BigNumber: parse as simple string",
+            "BulkError: parse like BulkString with length prefix",
+            "VerbatimString: extract 3-byte format, then data",
+            "Map: parse like array but create (key, value) pairs",
+            "Set: parse like array",
+            "Push: parse like array"
+          ],
+          "estimated_time": "120min"
+        },
+        {
+          "step": "refactor",
+          "description": "Consolidate similar parsing patterns",
+          "details": [
+            "Extract common length-prefixed parsing logic",
+            "Extract common collection parsing logic",
+            "Ensure consistent error handling",
+            "Add comprehensive documentation"
+          ],
+          "estimated_time": "30min"
+        }
+      ],
+      "dependencies": ["parser_array"],
+      "estimated_total": "210min"
+    },
+    "encoder_basic": {
+      "id": "encoder_basic",
+      "title": "Implement encoder for RESP2-compatible types",
+      "phase": "core_protocol",
+      "order": 8,
+      "file": "crates/protocol/src/encoder.rs",
+      "description": "Implement RespEncoder for serializing RESP values to bytes, starting with RESP2 types",
+      "acceptance_criteria": [
+        "RespEncoder struct with encode() method",
+        "Encodes SimpleString: +OK\\r\\n",
+        "Encodes Error: -ERR message\\r\\n",
+        "Encodes Integer: :123\\r\\n",
+        "Encodes BulkString: $5\\r\\nhello\\r\\n",
+        "Encodes null BulkString: $-1\\r\\n",
+        "Encodes Array recursively",
+        "Encodes null Array: *-1\\r\\n",
+        "Uses bytes::BytesMut efficiently"
+      ],
+      "tdd_steps": [
+        {
+          "step": "test",
+          "description": "Write tests for encoding RESP2 types",
+          "details": [
+            "Test encode SimpleString produces +OK\\r\\n",
+            "Test encode Error produces -ERR msg\\r\\n",
+            "Test encode Integer produces :123\\r\\n",
+            "Test encode BulkString produces correct format",
+            "Test encode null BulkString produces $-1\\r\\n",
+            "Test encode empty BulkString produces $0\\r\\n\\r\\n",
+            "Test encode simple array",
+            "Test encode nested array",
+            "Test encode null array produces *-1\\r\\n",
+            "Test roundtrip: parse(encode(value)) == value"
+          ],
+          "estimated_time": "50min"
+        },
+        {
+          "step": "implement",
+          "description": "Implement RespEncoder for RESP2 types",
+          "details": [
+            "Create RespEncoder struct (zero-sized)",
+            "Implement encode(value: &RespValue, buf: &mut BytesMut) -> Result<()>",
+            "SimpleString: put_u8('+'), put_slice(data), put_slice('\\r\\n')",
+            "Error: put_u8('-'), put_slice(data), put_slice('\\r\\n')",
+            "Integer: format number, put_u8(':'), put_slice(str), put_slice('\\r\\n')",
+            "BulkString: handle None ($-1), Some (length + data)",
+            "Array: handle None (*-1), Some (length + recursive encode)",
+            "Use BufMut trait methods from bytes crate"
+          ],
+          "estimated_time": "90min"
+        },
+        {
+          "step": "refactor",
+          "description": "Optimize encoding and add convenience methods",
+          "details": [
+            "Add encode_ok() convenience method",
+            "Add encode_error() convenience method",
+            "Add encode_null() convenience method",
+            "Optimize buffer pre-allocation if possible",
+            "Add comprehensive documentation"
+          ],
+          "estimated_time": "30min"
+        }
+      ],
+      "dependencies": ["error_types", "resp_value_types"],
+      "estimated_total": "170min"
+    },
+    "encoder_resp3": {
+      "id": "encoder_resp3",
+      "title": "Implement encoder for RESP3-specific types",
+      "phase": "core_protocol",
+      "order": 9,
+      "file": "crates/protocol/src/encoder.rs",
+      "description": "Complete encoder by adding all RESP3-specific type serialization",
+      "acceptance_criteria": [
+        "Encodes Null: _\\r\\n",
+        "Encodes Boolean: #t\\r\\n and #f\\r\\n",
+        "Encodes Double with inf/-inf/nan handling",
+        "Encodes BigNumber: (number\\r\\n",
+        "Encodes BulkError: !len\\r\\nerror\\r\\n",
+        "Encodes VerbatimString: =len\\r\\nfmt:data\\r\\n",
+        "Encodes Map: %count\\r\\n...",
+        "Encodes Set: ~count\\r\\n...",
+        "Encodes Push: >count\\r\\n..."
+      ],
+      "tdd_steps": [
+        {
+          "step": "test",
+          "description": "Write tests for encoding RESP3 types",
+          "details": [
+            "Test encode Null produces _\\r\\n",
+            "Test encode Boolean true/false",
+            "Test encode Double with normal value",
+            "Test encode Double with inf, -inf, nan",
+            "Test encode BigNumber",
+            "Test encode BulkError",
+            "Test encode VerbatimString with format field",
+            "Test encode Map with multiple pairs",
+            "Test encode Set with multiple elements",
+            "Test encode Push",
+            "Test roundtrip for all RESP3 types"
+          ],
+          "estimated_time": "60min"
+        },
+        {
+          "step": "implement",
+          "description": "Add RESP3 type encoding to RespEncoder",
+          "details": [
+            "Null: put_slice('_\\r\\n')",
+            "Boolean: put_slice('#t\\r\\n' or '#f\\r\\n')",
+            "Double: format with inf/-inf/nan special cases",
+            "BigNumber: put_u8('('), put_slice(number), put_slice('\\r\\n')",
+            "BulkError: length-prefixed like BulkString but with '!'",
+            "VerbatimString: length includes format, put format + ':' + data",
+            "Map: put_u8('%'), encode count, recursively encode pairs",
+            "Set: put_u8('~'), encode count, recursively encode elements",
+            "Push: put_u8('>'), encode count, recursively encode elements"
+          ],
+          "estimated_time": "90min"
+        },
+        {
+          "step": "refactor",
+          "description": "Consolidate encoding patterns and optimize",
+          "details": [
+            "Extract common collection encoding logic",
+            "Extract common length-prefixed encoding",
+            "Ensure consistent error handling",
+            "Add comprehensive documentation with examples"
+          ],
+          "estimated_time": "30min"
+        }
+      ],
+      "dependencies": ["encoder_basic", "parser_resp3_types"],
+      "estimated_total": "180min"
+    },
+    "inline_parser": {
+      "id": "inline_parser",
+      "title": "Implement inline command parser for telnet compatibility",
+      "phase": "core_protocol",
+      "order": 10,
+      "file": "crates/protocol/src/inline.rs",
+      "description": "Add inline command parsing to support telnet-style commands (GET key\\r\\n)",
+      "acceptance_criteria": [
+        "InlineCommandParser struct",
+        "Parses simple commands: GET key",
+        "Parses multi-word commands: SET key value",
+        "Handles quoted arguments: SET key \"value with spaces\"",
+        "Handles escape sequences within quotes",
+        "Converts to RespValue::Array format",
+        "Returns error for unclosed quotes",
+        "Trims whitespace appropriately"
+      ],
+      "tdd_steps": [
+        {
+          "step": "test",
+          "description": "Write tests for inline command parsing",
+          "details": [
+            "Test parse simple command: 'GET mykey'",
+            "Test parse multi-arg command: 'SET key value'",
+            "Test parse with extra whitespace",
+            "Test parse with quoted argument: 'SET key \"hello world\"'",
+            "Test parse with escaped quote: 'SET key \"say \\\"hi\\\"\"'",
+            "Test parse empty line returns EmptyCommand error",
+            "Test parse unclosed quote returns error",
+            "Test output is Array of BulkStrings"
+          ],
+          "estimated_time": "45min"
+        },
+        {
+          "step": "implement",
+          "description": "Implement InlineCommandParser",
+          "details": [
+            "Create InlineCommandParser struct (zero-sized)",
+            "Implement parse(line: &[u8]) -> Result<RespValue>",
+            "Convert line to UTF-8 string",
+            "Implement split_inline_command() with quote handling",
+            "State machine: normal, in_quotes, escape_next",
+            "Split on whitespace unless quoted",
+            "Handle backslash escapes in quotes",
+            "Convert parts to Vec<RespValue::BulkString>",
+            "Return RespValue::Array(Some(parts))"
+          ],
+          "estimated_time": "90min"
+        },
+        {
+          "step": "refactor",
+          "description": "Optimize string parsing and improve error messages",
+          "details": [
+            "Consider using str::split_whitespace for simple cases",
+            "Add clear error messages for malformed input",
+            "Add documentation with usage examples",
+            "Consider supporting additional escape sequences if needed"
+          ],
+          "estimated_time": "30min"
+        }
+      ],
+      "dependencies": ["error_types", "resp_value_types"],
+      "estimated_total": "165min"
+    },
+    "tokio_codec": {
+      "id": "tokio_codec",
+      "title": "Implement Tokio Decoder/Encoder for RespCodec",
+      "phase": "integration",
+      "order": 11,
+      "file": "crates/protocol/src/codec.rs",
+      "description": "Integrate parser and encoder with Tokio's codec framework for async I/O",
+      "acceptance_criteria": [
+        "RespCodec struct wrapping RespParser",
+        "Implements tokio_util::codec::Decoder trait",
+        "Implements tokio_util::codec::Encoder trait for RespValue",
+        "Implements Encoder for &RespValue (reference)",
+        "Supports configurable limits via constructor",
+        "Maintains parser state across decode calls",
+        "Works with tokio_util::codec::Framed"
+      ],
+      "tdd_steps": [
+        {
+          "step": "test",
+          "description": "Write tests for codec integration",
+          "details": [
+            "Test decode single complete frame",
+            "Test decode multiple frames in buffer",
+            "Test decode incomplete frame (returns Ok(None))",
+            "Test decode continues after more data",
+            "Test encode single value",
+            "Test encode multiple values",
+            "Test codec with configurable limits",
+            "Mock async I/O if needed for unit tests"
+          ],
+          "estimated_time": "45min"
+        },
+        {
+          "step": "implement",
+          "description": "Implement RespCodec with Decoder/Encoder traits",
+          "details": [
+            "Create RespCodec struct with RespParser field",
+            "Implement new() constructor with default parser",
+            "Implement with_limits() constructor",
+            "Implement Decoder trait: type Item = RespValue, type Error = ProtocolError",
+            "Decoder::decode() calls parser.parse() directly",
+            "Implement Encoder<RespValue> trait",
+            "Encoder::encode() calls RespEncoder::encode()",
+            "Implement Encoder<&RespValue> for convenience"
+          ],
+          "estimated_time": "75min"
+        },
+        {
+          "step": "refactor",
+          "description": "Optimize and document codec usage",
+          "details": [
+            "Add usage examples in documentation",
+            "Ensure zero-copy where possible",
+            "Verify error propagation works correctly",
+            "Add inline annotations for hot paths"
+          ],
+          "estimated_time": "25min"
+        }
+      ],
+      "dependencies": ["parser_resp3_types", "encoder_resp3"],
+      "estimated_total": "145min"
+    },
+    "command_parser": {
+      "id": "command_parser",
+      "title": "Implement RespCommand parser for Phase 1 commands",
+      "phase": "integration",
+      "order": 12,
+      "file": "crates/protocol/src/command.rs",
+      "description": "Define RespCommand enum and parser for GET, SET, DEL, EXISTS, PING commands",
+      "acceptance_criteria": [
+        "RespCommand enum with 5 variants (GET, SET, DEL, EXISTS, PING)",
+        "from_value() parses RespValue::Array into RespCommand",
+        "Case-insensitive command name matching",
+        "Validates argument count (arity checking)",
+        "Returns WrongArity error with helpful details",
+        "Returns UnknownCommand for unsupported commands",
+        "to_value() converts command back to RespValue (for testing)",
+        "Uses bytes::Bytes for zero-copy"
+      ],
+      "tdd_steps": [
+        {
+          "step": "test",
+          "description": "Write tests for command parsing",
+          "details": [
+            "Test parse GET command: [GET, key]",
+            "Test parse SET command: [SET, key, value]",
+            "Test parse DEL command: [DEL, key1, key2, ...]",
+            "Test parse EXISTS command: [EXISTS, key1, key2, ...]",
+            "Test parse PING command: [PING] and [PING, message]",
+            "Test case-insensitive: 'get', 'Get', 'GET'",
+            "Test wrong arity for each command",
+            "Test unknown command returns error",
+            "Test non-array input returns ExpectedArray error",
+            "Test empty array returns EmptyCommand error",
+            "Test roundtrip: to_value(from_value(cmd)) == cmd"
+          ],
+          "estimated_time": "60min"
+        },
+        {
+          "step": "implement",
+          "description": "Implement RespCommand enum and parsers",
+          "details": [
+            "Define RespCommand enum: Get{key}, Set{key,value}, Del{keys}, Exists{keys}, Ping{message}",
+            "Implement from_value(value: RespValue) -> Result<Self>",
+            "Extract array or return ExpectedArray error",
+            "Extract first element as command name",
+            "Convert to uppercase for case-insensitive matching",
+            "Match on command name and validate arity",
+            "Extract arguments using as_bytes() helper",
+            "Return appropriate RespCommand variant",
+            "Implement to_value() for testing/debugging",
+            "Use Bytes::from_static for command names"
+          ],
+          "estimated_time": "120min"
+        },
+        {
+          "step": "refactor",
+          "description": "Optimize command parsing and improve errors",
+          "details": [
+            "Consider using match guard for arity checking",
+            "Ensure error messages are actionable",
+            "Add documentation with command format examples",
+            "Consider macro for repetitive command definitions (future)"
+          ],
+          "estimated_time": "30min"
+        }
+      ],
+      "dependencies": ["resp_value_helpers", "error_types"],
+      "estimated_total": "210min"
+    },
+    "buffer_pool": {
+      "id": "buffer_pool",
+      "title": "Implement buffer pool for efficient encoding",
+      "phase": "integration",
+      "order": 13,
+      "file": "crates/protocol/src/lib.rs",
+      "description": "Add optional buffer pool for reusing BytesMut allocations during encoding",
+      "acceptance_criteria": [
+        "BufferPool struct for managing BytesMut instances",
+        "acquire() returns buffer (from pool or new)",
+        "release() returns buffer to pool",
+        "Configurable max pool size",
+        "Configurable buffer capacity",
+        "Thread-safe if needed (consider Mutex)",
+        "Clear buffers before reuse",
+        "Verify no memory leaks"
+      ],
+      "tdd_steps": [
+        {
+          "step": "test",
+          "description": "Write tests for buffer pool",
+          "details": [
+            "Test acquire returns buffer with correct capacity",
+            "Test release and re-acquire reuses buffer",
+            "Test pool respects max size limit",
+            "Test buffer is cleared before reuse",
+            "Test capacity is preserved",
+            "Test oversized buffers are not pooled",
+            "Benchmark pool vs no pool performance"
+          ],
+          "estimated_time": "40min"
+        },
+        {
+          "step": "implement",
+          "description": "Implement BufferPool",
+          "details": [
+            "Create BufferPool struct with Vec<BytesMut> and capacity fields",
+            "Implement new(capacity: usize) constructor",
+            "Implement acquire() -> BytesMut",
+            "Check pool, return existing or allocate new",
+            "Implement release(buf: BytesMut)",
+            "Clear buffer contents",
+            "Check capacity matches and pool not full",
+            "Add to pool or drop",
+            "Consider adding max_pool_size limit (default 100)"
+          ],
+          "estimated_time": "60min"
+        },
+        {
+          "step": "refactor",
+          "description": "Optimize and document buffer pool",
+          "details": [
+            "Add documentation on when to use pool",
+            "Consider thread-safe version with Mutex if needed",
+            "Add usage examples",
+            "Profile to verify performance benefit"
+          ],
+          "estimated_time": "25min"
+        }
+      ],
+      "dependencies": [],
+      "estimated_total": "125min"
+    },
+    "property_tests": {
+      "id": "property_tests",
+      "title": "Implement property-based tests with proptest",
+      "phase": "testing_validation",
+      "order": 14,
+      "file": "crates/protocol/src/tests/property_tests.rs",
+      "description": "Add comprehensive property tests for fuzzing and roundtrip verification",
+      "acceptance_criteria": [
+        "Arbitrary RespValue generator with depth control",
+        "Roundtrip property: parse(encode(value)) == value",
+        "Parser never panics on arbitrary input",
+        "Encoder never panics on valid RespValue",
+        "Size estimation is reasonably accurate",
+        "Runs 1000+ test cases per property",
+        "Tests cover nested structures",
+        "Tests cover edge cases (empty, null, large)"
+      ],
+      "tdd_steps": [
+        {
+          "step": "test",
+          "description": "Define property test strategies",
+          "details": [
+            "Create arb_resp_value() strategy with depth limit",
+            "Generate leaf values: strings, integers, booleans, null",
+            "Generate recursive values: arrays, maps, sets",
+            "Control size and depth to avoid explosions",
+            "Define proptest! macro tests for each property"
+          ],
+          "estimated_time": "60min"
+        },
+        {
+          "step": "implement",
+          "description": "Implement property tests",
+          "details": [
+            "Test roundtrip: encode then decode equals original",
+            "Test parser doesn't panic on arbitrary bytes",
+            "Test encoder doesn't panic on valid values",
+            "Test size_estimate is within 20% of actual",
+            "Test command parsing roundtrips",
+            "Configure proptest with reasonable case counts"
+          ],
+          "estimated_time": "90min"
+        },
+        {
+          "step": "refactor",
+          "description": "Optimize test strategies and document findings",
+          "details": [
+            "Tune depth and size limits for test speed",
+            "Add shrinking to proptest for better error reporting",
+            "Document any edge cases found during testing",
+            "Consider adding regression tests for found issues"
+          ],
+          "estimated_time": "30min"
+        }
+      ],
+      "dependencies": ["encoder_resp3", "parser_resp3_types"],
+      "estimated_total": "180min"
+    },
+    "integration_tests": {
+      "id": "integration_tests",
+      "title": "Implement parser/encoder integration tests",
+      "phase": "testing_validation",
+      "order": 15,
+      "file": "crates/protocol/src/tests/parser_tests.rs",
+      "description": "Add integration tests covering complete parsing scenarios including pipelining and partial data",
+      "acceptance_criteria": [
+        "Tests for all 14 RESP3 types",
+        "Tests for pipelined commands (multiple frames in buffer)",
+        "Tests for partial data handling (incremental parsing)",
+        "Tests for nested structures (arrays of arrays, maps of arrays)",
+        "Tests for size limit enforcement",
+        "Tests for invalid input handling",
+        "Tests for inline command parsing",
+        "Tests verify buffer management (no leaks)"
+      ],
+      "tdd_steps": [
+        {
+          "step": "test",
+          "description": "Write comprehensive integration test scenarios",
+          "details": [
+            "Test parsing complete RESP messages for all 14 types",
+            "Test parsing multiple pipelined commands in single buffer",
+            "Test parsing with incremental data delivery",
+            "Test deeply nested arrays and maps",
+            "Test mixed RESP2/RESP3 types in single message",
+            "Test all error conditions (limits, invalid format)",
+            "Test inline command parsing for common commands",
+            "Verify buffer state after parsing"
+          ],
+          "estimated_time": "90min"
+        },
+        {
+          "step": "implement",
+          "description": "Implement integration test suite",
+          "details": [
+            "Create test modules for different scenarios",
+            "Use BytesMut for building test data",
+            "Test partial parsing by splitting buffers",
+            "Test pipelining by concatenating frames",
+            "Verify parser state resets correctly",
+            "Add helper functions for common test patterns",
+            "Use descriptive test names"
+          ],
+          "estimated_time": "120min"
+        },
+        {
+          "step": "refactor",
+          "description": "Organize tests and add documentation",
+          "details": [
+            "Group related tests into modules",
+            "Extract common test fixtures",
+            "Add comments explaining complex scenarios",
+            "Ensure test coverage is comprehensive",
+            "Add test utilities for future tests"
+          ],
+          "estimated_time": "30min"
+        }
+      ],
+      "dependencies": ["parser_resp3_types", "encoder_resp3", "inline_parser"],
+      "estimated_total": "240min"
+    },
+    "codec_integration_tests": {
+      "id": "codec_integration_tests",
+      "title": "Implement Tokio codec integration tests",
+      "phase": "testing_validation",
+      "order": 16,
+      "file": "crates/protocol/src/tests/codec_tests.rs",
+      "description": "Add async integration tests for Tokio codec using real TCP connections",
+      "acceptance_criteria": [
+        "Tests with real TcpListener/TcpStream",
+        "Tests using Framed wrapper",
+        "Tests for echo server scenario",
+        "Tests for pipelined command handling",
+        "Tests for backpressure handling",
+        "Tests for connection close handling",
+        "Uses tokio::test attribute",
+        "Verifies codec state management"
+      ],
+      "tdd_steps": [
+        {
+          "step": "test",
+          "description": "Write async integration test scenarios",
+          "details": [
+            "Test basic client-server communication",
+            "Test sending and receiving multiple frames",
+            "Test pipelined requests and responses",
+            "Test handling incomplete frames at connection boundary",
+            "Test proper cleanup on connection close",
+            "Test codec with different buffer sizes",
+            "Test concurrent connections (spawn multiple clients)"
+          ],
+          "estimated_time": "60min"
+        },
+        {
+          "step": "implement",
+          "description": "Implement Tokio codec integration tests",
+          "details": [
+            "Set up test TCP server with Framed codec",
+            "Implement echo server for basic testing",
+            "Implement request-response pattern tests",
+            "Test sending multiple pipelined commands",
+            "Verify responses arrive in correct order",
+            "Use tokio::spawn for concurrent tasks",
+            "Add timeout handling for test reliability",
+            "Use #[tokio::test] attribute"
+          ],
+          "estimated_time": "120min"
+        },
+        {
+          "step": "refactor",
+          "description": "Clean up test code and add utilities",
+          "details": [
+            "Extract common server setup into helper",
+            "Add test utilities for client connections",
+            "Ensure tests are independent and deterministic",
+            "Add documentation for test patterns",
+            "Consider adding stress tests (many connections)"
+          ],
+          "estimated_time": "30min"
+        }
+      ],
+      "dependencies": ["tokio_codec"],
+      "estimated_total": "210min"
+    },
+    "benchmarks": {
+      "id": "benchmarks",
+      "title": "Implement criterion benchmarks for performance validation",
+      "phase": "testing_validation",
+      "order": 17,
+      "file": "crates/protocol/benches/resp_benchmark.rs",
+      "description": "Add comprehensive benchmarks to verify >50K ops/sec and <100μs latency targets",
+      "acceptance_criteria": [
+        "Benchmarks for parsing all RESP types",
+        "Benchmarks for encoding all RESP types",
+        "Benchmarks for roundtrip (encode + parse)",
+        "Benchmarks for common Redis commands",
+        "Benchmarks for pipelined parsing",
+        "Benchmarks for nested structures",
+        "Results show >50K ops/sec throughput",
+        "Results show <100μs p99 latency",
+        "HTML reports generated"
+      ],
+      "tdd_steps": [
+        {
+          "step": "test",
+          "description": "Design benchmark suite covering critical paths",
+          "details": [
+            "Define benchmark for parsing simple string",
+            "Define benchmark for parsing bulk string (various sizes)",
+            "Define benchmark for parsing array",
+            "Define benchmark for encoding each type",
+            "Define benchmark for common commands (GET, SET)",
+            "Define benchmark for pipelined parsing",
+            "Define benchmark for nested arrays",
+            "Set up criterion groups for organization"
+          ],
+          "estimated_time": "45min"
+        },
+        {
+          "step": "implement",
+          "description": "Implement criterion benchmarks",
+          "details": [
+            "Create benches/resp_benchmark.rs",
+            "Set up criterion configuration",
+            "Implement benchmark functions using criterion::black_box",
+            "Create realistic test data for each benchmark",
+            "Benchmark individual operations (parse, encode)",
+            "Benchmark end-to-end scenarios",
+            "Configure sample size and measurement time",
+            "Generate baseline for regression detection"
+          ],
+          "estimated_time": "90min"
+        },
+        {
+          "step": "refactor",
+          "description": "Analyze results and optimize if needed",
+          "details": [
+            "Review benchmark results against targets",
+            "Identify performance bottlenecks",
+            "Add additional benchmarks for slow paths",
+            "Document performance characteristics",
+            "Set up CI integration for regression detection",
+            "Add comparison benchmarks vs redis-benchmark if useful"
+          ],
+          "estimated_time": "45min"
+        }
+      ],
+      "dependencies": ["parser_resp3_types", "encoder_resp3", "command_parser"],
+      "estimated_total": "180min"
+    }
+  },
+  "summary": {
+    "total_tasks": 17,
+    "total_estimated_time": "48-64 hours",
+    "phases_breakdown": {
+      "foundation": "4-6 hours (3 tasks)",
+      "core_protocol": "10-14 hours (7 tasks)",
+      "integration": "6-8 hours (3 tasks)",
+      "testing_validation": "8-10 hours (4 tasks)"
+    },
+    "critical_path": [
+      "error_types",
+      "resp_value_types",
+      "resp_value_helpers",
+      "parser_simple_types",
+      "parser_bulk_string",
+      "parser_array",
+      "parser_resp3_types",
+      "encoder_basic",
+      "encoder_resp3",
+      "tokio_codec",
+      "command_parser"
+    ],
+    "parallel_work_opportunities": [
+      "encoder_basic can start after resp_value_types (parallel to parser work)",
+      "inline_parser can start after resp_value_types (parallel to parser/encoder)",
+      "buffer_pool can start early (no dependencies)",
+      "All testing_validation tasks can run in parallel once integration phase completes"
+    ]
+  }
+}
