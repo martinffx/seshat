@@ -5,10 +5,12 @@
 //! architecture.
 
 pub mod config;
+pub mod state_machine;
 pub mod storage;
 
 // Re-export main types for convenience
 pub use config::{ClusterConfig, InitialMember, NodeConfig, RaftConfig};
+pub use state_machine::StateMachine;
 pub use storage::MemStorage;
 
 pub fn add(left: u64, right: u64) -> u64 {

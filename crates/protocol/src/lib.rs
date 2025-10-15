@@ -10,11 +10,12 @@
 //! - **RequestVote RPC**: Leader election
 //! - **AppendEntries RPC**: Log replication and heartbeats
 //! - **InstallSnapshot RPC**: Snapshot transfer
+//! - **Operations**: State machine commands (Set, Del)
 //!
 //! # Example
 //!
 //! ```rust
-//! use seshat_protocol::{RequestVoteRequest, EntryType};
+//! use seshat_protocol::{RequestVoteRequest, EntryType, Operation};
 //!
 //! // Create a RequestVote request
 //! let request = RequestVoteRequest {
@@ -23,12 +24,21 @@
 //!     last_log_index: 100,
 //!     last_log_term: 4,
 //! };
+//!
+//! // Create a state machine operation
+//! let op = Operation::Set {
+//!     key: b"foo".to_vec(),
+//!     value: b"bar".to_vec(),
+//! };
 //! ```
 
 // Include the generated protobuf code
 pub mod raft {
     tonic::include_proto!("raft");
 }
+
+// State machine operations
+pub mod operations;
 
 // Re-export commonly used types for convenience
 pub use raft::{
@@ -37,6 +47,8 @@ pub use raft::{
     InstallSnapshotRequest, InstallSnapshotResponse, LogEntry, RequestVoteRequest,
     RequestVoteResponse,
 };
+
+pub use operations::{Operation, OperationError, OperationResult};
 
 #[cfg(test)]
 mod tests {
