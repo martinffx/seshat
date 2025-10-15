@@ -3,6 +3,7 @@
 //! The state machine maintains the key-value store state and tracks the last applied
 //! log index. It provides basic operations for reading and querying the state.
 
+use serde::{Deserialize, Serialize};
 use seshat_protocol::Operation;
 use std::collections::HashMap;
 
@@ -21,6 +22,7 @@ use std::collections::HashMap;
 /// assert_eq!(sm.get(b"key"), None);
 /// assert!(!sm.exists(b"key"));
 /// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StateMachine {
     /// The key-value data store
     data: HashMap<Vec<u8>, Vec<u8>>,
@@ -174,6 +176,81 @@ impl StateMachine {
 
         // Step 5: Return the operation result bytes
         Ok(result)
+    }
+
+    /// Creates a snapshot of the current state machine.
+    ///
+    /// This method serializes the entire state machine (data and last_applied)
+    /// into a byte vector using bincode. The snapshot can be used for log
+    /// compaction or transferring state to new Raft nodes.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Vec<u8>)` - The serialized snapshot bytes
+    /// * `Err(Box<dyn std::error::Error>)` - If serialization fails
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use seshat_raft::StateMachine;
+    /// use seshat_protocol::Operation;
+    ///
+    /// let mut sm = StateMachine::new();
+    /// let op = Operation::Set {
+    ///     key: b"foo".to_vec(),
+    ///     value: b"bar".to_vec(),
+    /// };
+    /// let data = op.serialize().unwrap();
+    /// sm.apply(1, &data).unwrap();
+    ///
+    /// let snapshot = sm.snapshot().unwrap();
+    /// assert!(!snapshot.is_empty());
+    /// ```
+    pub fn snapshot(&self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        bincode::serialize(self).map_err(|e| e.into())
+    }
+
+    /// Restores the state machine from a snapshot.
+    ///
+    /// This method deserializes a snapshot and replaces the current state
+    /// machine data and last_applied index with the snapshot contents.
+    /// Any existing state is completely overwritten.
+    ///
+    /// # Arguments
+    ///
+    /// * `snapshot` - The serialized snapshot bytes
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - If restoration succeeds
+    /// * `Err(Box<dyn std::error::Error>)` - If deserialization fails
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use seshat_raft::StateMachine;
+    /// use seshat_protocol::Operation;
+    ///
+    /// let mut sm1 = StateMachine::new();
+    /// let op = Operation::Set {
+    ///     key: b"foo".to_vec(),
+    ///     value: b"bar".to_vec(),
+    /// };
+    /// let data = op.serialize().unwrap();
+    /// sm1.apply(1, &data).unwrap();
+    ///
+    /// let snapshot = sm1.snapshot().unwrap();
+    ///
+    /// let mut sm2 = StateMachine::new();
+    /// sm2.restore(&snapshot).unwrap();
+    /// assert_eq!(sm2.get(b"foo"), Some(b"bar".to_vec()));
+    /// assert_eq!(sm2.last_applied(), 1);
+    /// ```
+    pub fn restore(&mut self, snapshot: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
+        let restored: StateMachine = bincode::deserialize(snapshot)?;
+        self.data = restored.data;
+        self.last_applied = restored.last_applied;
+        Ok(())
     }
 }
 
@@ -524,5 +601,197 @@ mod tests {
         assert_eq!(result, b"OK");
         assert_eq!(sm.get(b"large_key"), Some(large_value));
         assert_eq!(sm.last_applied(), 1);
+    }
+
+    // ========== NEW TESTS FOR snapshot() AND restore() METHODS ==========
+
+    #[test]
+    fn test_snapshot_empty() {
+        // Create an empty state machine
+        let sm = StateMachine::new();
+
+        // Create a snapshot
+        let snapshot = sm.snapshot().expect("Snapshot should succeed");
+
+        // Verify snapshot is not empty (contains at least metadata)
+        assert!(!snapshot.is_empty(), "Snapshot should not be empty");
+    }
+
+    #[test]
+    fn test_snapshot_with_data() {
+        // Create a state machine with some data
+        let mut sm = StateMachine::new();
+        let op = Operation::Set {
+            key: b"foo".to_vec(),
+            value: b"bar".to_vec(),
+        };
+        let data = op.serialize().expect("Serialization should succeed");
+        sm.apply(1, &data).expect("Apply should succeed");
+
+        // Create a snapshot
+        let snapshot = sm.snapshot().expect("Snapshot should succeed");
+
+        // Verify snapshot is not empty
+        assert!(!snapshot.is_empty(), "Snapshot should contain data");
+    }
+
+    #[test]
+    fn test_restore_from_snapshot() {
+        // Create a state machine with data
+        let mut sm1 = StateMachine::new();
+        let op1 = Operation::Set {
+            key: b"key1".to_vec(),
+            value: b"value1".to_vec(),
+        };
+        let data1 = op1.serialize().expect("Serialization should succeed");
+        sm1.apply(1, &data1).expect("Apply should succeed");
+
+        let op2 = Operation::Set {
+            key: b"key2".to_vec(),
+            value: b"value2".to_vec(),
+        };
+        let data2 = op2.serialize().expect("Serialization should succeed");
+        sm1.apply(2, &data2).expect("Apply should succeed");
+
+        // Create a snapshot
+        let snapshot = sm1.snapshot().expect("Snapshot should succeed");
+
+        // Create a new state machine and restore from snapshot
+        let mut sm2 = StateMachine::new();
+        sm2.restore(&snapshot).expect("Restore should succeed");
+
+        // Verify the state was restored correctly
+        assert_eq!(sm2.get(b"key1"), Some(b"value1".to_vec()));
+        assert_eq!(sm2.get(b"key2"), Some(b"value2".to_vec()));
+        assert_eq!(sm2.last_applied(), 2);
+    }
+
+    #[test]
+    fn test_snapshot_restore_roundtrip() {
+        // Create a state machine with multiple operations
+        let mut sm1 = StateMachine::new();
+        let ops = [
+            Operation::Set {
+                key: b"a".to_vec(),
+                value: b"1".to_vec(),
+            },
+            Operation::Set {
+                key: b"b".to_vec(),
+                value: b"2".to_vec(),
+            },
+            Operation::Set {
+                key: b"c".to_vec(),
+                value: b"3".to_vec(),
+            },
+        ];
+
+        for (i, op) in ops.iter().enumerate() {
+            let data = op.serialize().expect("Serialization should succeed");
+            sm1.apply((i + 1) as u64, &data)
+                .expect("Apply should succeed");
+        }
+
+        // Create snapshot
+        let snapshot = sm1.snapshot().expect("Snapshot should succeed");
+
+        // Restore to new state machine
+        let mut sm2 = StateMachine::new();
+        sm2.restore(&snapshot).expect("Restore should succeed");
+
+        // Verify all data matches
+        assert_eq!(sm2.get(b"a"), Some(b"1".to_vec()));
+        assert_eq!(sm2.get(b"b"), Some(b"2".to_vec()));
+        assert_eq!(sm2.get(b"c"), Some(b"3".to_vec()));
+        assert_eq!(sm2.last_applied(), 3);
+        assert_eq!(sm2.data.len(), 3);
+    }
+
+    #[test]
+    fn test_restore_empty_snapshot() {
+        // Create an empty state machine and snapshot it
+        let sm1 = StateMachine::new();
+        let snapshot = sm1.snapshot().expect("Snapshot should succeed");
+
+        // Restore to new state machine
+        let mut sm2 = StateMachine::new();
+        sm2.restore(&snapshot).expect("Restore should succeed");
+
+        // Verify state is empty
+        assert_eq!(sm2.last_applied(), 0);
+        assert_eq!(sm2.data.len(), 0);
+    }
+
+    #[test]
+    fn test_restore_overwrites_existing_state() {
+        // Create a state machine with some data
+        let mut sm1 = StateMachine::new();
+        let op1 = Operation::Set {
+            key: b"old_key".to_vec(),
+            value: b"old_value".to_vec(),
+        };
+        let data1 = op1.serialize().expect("Serialization should succeed");
+        sm1.apply(1, &data1).expect("Apply should succeed");
+
+        // Create another state machine with different data
+        let mut sm2 = StateMachine::new();
+        let op2 = Operation::Set {
+            key: b"new_key".to_vec(),
+            value: b"new_value".to_vec(),
+        };
+        let data2 = op2.serialize().expect("Serialization should succeed");
+        sm2.apply(5, &data2).expect("Apply should succeed");
+
+        // Create snapshot from sm2
+        let snapshot = sm2.snapshot().expect("Snapshot should succeed");
+
+        // Restore sm1 from sm2's snapshot
+        sm1.restore(&snapshot).expect("Restore should succeed");
+
+        // Verify sm1 now has sm2's state
+        assert_eq!(sm1.get(b"old_key"), None); // Old data gone
+        assert_eq!(sm1.get(b"new_key"), Some(b"new_value".to_vec())); // New data present
+        assert_eq!(sm1.last_applied(), 5);
+    }
+
+    #[test]
+    fn test_restore_with_invalid_data() {
+        // Create a state machine
+        let mut sm = StateMachine::new();
+
+        // Try to restore from corrupted snapshot data
+        let invalid_snapshot = vec![0xFF, 0xFF, 0xFF, 0xFF];
+        let result = sm.restore(&invalid_snapshot);
+
+        // Should fail with deserialization error
+        assert!(result.is_err(), "Invalid snapshot should fail to restore");
+    }
+
+    #[test]
+    fn test_snapshot_large_state() {
+        // Create a state machine with many keys
+        let mut sm = StateMachine::new();
+        for i in 0..100 {
+            let key = format!("key{}", i).into_bytes();
+            let value = format!("value{}", i).into_bytes();
+            let op = Operation::Set { key, value };
+            let data = op.serialize().expect("Serialization should succeed");
+            sm.apply(i + 1, &data).expect("Apply should succeed");
+        }
+
+        // Create snapshot
+        let snapshot = sm.snapshot().expect("Snapshot should succeed");
+
+        // Restore to new state machine
+        let mut sm2 = StateMachine::new();
+        sm2.restore(&snapshot).expect("Restore should succeed");
+
+        // Verify all 100 keys are present
+        for i in 0..100 {
+            let key = format!("key{}", i).into_bytes();
+            let expected_value = format!("value{}", i).into_bytes();
+            assert_eq!(sm2.get(&key), Some(expected_value));
+        }
+        assert_eq!(sm2.last_applied(), 100);
+        assert_eq!(sm2.data.len(), 100);
     }
 }

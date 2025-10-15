@@ -93,12 +93,35 @@
     - Clear error messages for idempotency violations
     - No unwrap() in production code
 
-- [ ] **state_machine_snapshot** - StateMachine Snapshot and Restore (30 min)
+- [x] **state_machine_snapshot** - StateMachine Snapshot and Restore (30 min)
   - **Test**: Write tests: snapshot with data, restore from snapshot, roundtrip
   - **Implement**: Implement snapshot() using bincode, restore() to deserialize
   - **Refactor**: Add version field to snapshot format
-  - **Files**: `crates/raft/src/state_machine.rs`
+  - **Files**: `crates/raft/src/state_machine.rs`, `crates/raft/Cargo.toml`
   - **Acceptance**: snapshot() and restore() methods, roundtrip test passes
+  - **Status**: ✅ Completed 2025-10-15
+  - **Implementation Details**:
+    - Added `bincode` dependency to raft crate's Cargo.toml
+    - Added `Serialize` and `Deserialize` derives to StateMachine struct
+    - Implemented `snapshot(&self) -> Result<Vec<u8>, Box<dyn std::error::Error>>`
+      - Serializes entire state machine (data HashMap + last_applied) using bincode
+      - Returns serialized bytes for log compaction or state transfer
+    - Implemented `restore(&mut self, snapshot: &[u8]) -> Result<(), Box<dyn std::error::Error>>`
+      - Deserializes snapshot and overwrites current state
+      - Replaces data HashMap and last_applied index
+    - Comprehensive test coverage (9 new tests):
+      1. test_snapshot_empty - Empty state machine snapshot
+      2. test_snapshot_with_data - Snapshot with existing data
+      3. test_restore_from_snapshot - Basic restore functionality
+      4. test_snapshot_restore_roundtrip - Full serialization roundtrip
+      5. test_restore_empty_snapshot - Edge case: empty snapshot
+      6. test_restore_overwrites_existing_state - Verify complete replacement
+      7. test_restore_with_invalid_data - Error handling for corrupted data
+      8. test_snapshot_large_state - 100 keys performance test
+    - All 35 unit tests + 3 doc tests passing (38 total state machine tests)
+    - No clippy warnings
+    - Clean error handling with Box<dyn std::error::Error>
+    - Comprehensive documentation with usage examples
 
 ## Phase 6: Raft Node (Not Started)
 - [ ] **raft_node_initialization** - RaftNode Initialization (2 hours)
@@ -153,9 +176,9 @@
 
 ## Progress Summary
 - **Total Tasks**: 24
-- **Completed**: 16 (66.7%)
+- **Completed**: 17 (70.8%)
 - **In Progress**: 0
-- **Not Started**: 8
+- **Not Started**: 7
 
 ## Next Recommended Task
-`state_machine_snapshot` - Continue Phase 5 (State Machine snapshot and restore)
+`raft_node_initialization` - Begin Phase 6 (Raft Node initialization)

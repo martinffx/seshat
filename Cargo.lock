@@ -1236,6 +1236,7 @@ dependencies = [
 name = "seshat-raft"
 version = "0.1.0"
 dependencies = [
+ "bincode",
  "prost 0.11.9",
  "raft",
  "serde",
