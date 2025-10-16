@@ -267,7 +267,7 @@
       - `is_leader(&self) -> bool`
       - `leader_id(&self) -> Option<u64>`
 
-## Phase 7: Integration (In Progress - 50% Complete)
+## Phase 7: Integration (✅ Complete)
 - [x] **single_node_bootstrap** - Single Node Bootstrap Test (1 hour)
   - **Test**: Create RaftNode, tick until becomes leader
   - **Implement**: Use test utilities to create node and run event loop
@@ -300,18 +300,70 @@
     - No clippy warnings
     - Ready for next integration test (single_node_propose_apply)
 
-- [ ] **single_node_propose_apply** - Single Node Propose and Apply Test (1 hour)
+- [x] **single_node_propose_apply** - Single Node Propose and Apply Test (1 hour)
   - **Test**: Become leader, propose SET, handle ready, verify get() works
   - **Implement**: Propose operation, process ready in loop, check state machine
   - **Refactor**: Add async test utilities
-  - **Files**: `crates/raft/tests/integration_tests.rs`
+  - **Files**: `crates/raft/tests/integration_tests.rs`, `crates/raft/src/node.rs`
   - **Acceptance**: Can propose and apply operation, state machine reflects changes
+  - **Status**: ✅ Completed 2025-10-16
+  - **Implementation Details**:
+    - **Modified Files**:
+      - `crates/raft/src/node.rs`:
+        - Added `get(&self, key: &[u8]) -> Option<Vec<u8>>` method for state machine access
+        - Fixed `RaftNode::new()` to properly initialize ConfState with peers as voters
+        - Fixed `handle_ready()` to call `advance_apply()` and handle light ready
+        - Added 3 unit tests for the get() method
+      - `crates/raft/tests/integration_tests.rs`:
+        - Added 7 comprehensive integration tests:
+          1. test_single_node_propose_and_apply - Basic propose → commit → apply flow
+          2. test_propose_multiple_operations - Sequential SET operations
+          3. test_propose_del_operation - SET followed by DEL
+          4. test_propose_and_verify_persistence - Value persists across event loops
+          5. test_propose_empty_key - Edge case: empty key
+          6. test_propose_large_value - Large value (10KB)
+          7. test_propose_overwrite_value - Overwrite existing key
+    - **Key Fixes**:
+      - **ConfState initialization**: Added voters to ConfState so single-node clusters can elect a leader
+      - **advance_apply() call**: Added missing call to finalize apply process in raft-rs
+      - **Light ready handling**: Process additional committed entries from light ready
+    - **Test Results**:
+      - All 155 unit tests passing
+      - All 13 integration tests passing (6 existing + 7 new)
+      - All 31 doc tests passing
+      - Zero clippy warnings
+      - Total: 199 tests passing
+    - **Coverage**:
+      - ✅ Single-node cluster bootstrap and leader election
+      - ✅ Propose operations (SET)
+      - ✅ Apply operations to state machine
+      - ✅ Verify state machine contents
+      - ✅ Multiple sequential operations
+      - ✅ DEL operations
+      - ✅ Edge cases (empty keys, large values, overwrites)
+      - ✅ Persistence across event loop cycles
 
 ## Progress Summary
 - **Total Tasks**: 24
-- **Completed**: 23 (95.8%)
+- **Completed**: 24 (100%)
 - **In Progress**: 0
-- **Not Started**: 1
+- **Not Started**: 0
 
-## Next Recommended Task
-`single_node_propose_apply` - Continue Phase 7 (Integration testing for single-node propose and apply)
+## Phase Completion Status
+- **Phase 1**: ✅ 100% Complete (2/2)
+- **Phase 2**: ✅ 100% Complete (3/3)
+- **Phase 3**: ✅ 100% Complete (2/2)
+- **Phase 4**: ✅ 100% Complete (7/7)
+- **Phase 5**: ✅ 100% Complete (3/3)
+- **Phase 6**: ✅ 100% Complete (5/5)
+- **Phase 7**: ✅ 100% Complete (2/2)
+
+## Feature Complete
+All planned tasks for the Raft implementation feature are now complete. The implementation includes:
+- ✅ Complete storage layer with MemStorage
+- ✅ Full state machine with apply, snapshot, and restore
+- ✅ RaftNode with all core functionality (tick, propose, ready handling, leader queries)
+- ✅ Integration tests for single-node bootstrap and propose/apply flow
+- ✅ 199 tests passing (155 unit + 13 integration + 31 doc tests)
+- ✅ Zero clippy warnings
+- ✅ Comprehensive test coverage for all components

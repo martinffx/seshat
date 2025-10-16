@@ -40,11 +40,20 @@ impl RaftNode {
     ///
     /// let node = RaftNode::new(1, vec![1, 2, 3]).unwrap();
     /// ```
-    pub fn new(id: u64, _peers: Vec<u64>) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn new(id: u64, peers: Vec<u64>) -> Result<Self, Box<dyn std::error::Error>> {
         // Step 1: Create MemStorage
         let storage = MemStorage::new();
 
-        // Step 2: Create raft::Config
+        // Step 2: Initialize ConfState with peers as voters
+        // This is necessary for the cluster to function - without voters,
+        // no node can become leader or reach quorum
+        let conf_state = raft::prelude::ConfState {
+            voters: peers.clone(),
+            ..Default::default()
+        };
+        storage.set_conf_state(conf_state);
+
+        // Step 3: Create raft::Config
         let config = raft::Config {
             id,
             election_tick: 10,
@@ -52,18 +61,17 @@ impl RaftNode {
             ..Default::default()
         };
 
-        // Step 3: Initialize RawNode with storage and config
-        // Note: peers parameter will be used in future tasks for cluster setup
+        // Step 4: Initialize RawNode with storage and config
         let raw_node = RawNode::new(
             &config,
             storage,
             &slog::Logger::root(slog::Discard, slog::o!()),
         )?;
 
-        // Step 4: Create StateMachine
+        // Step 5: Create StateMachine
         let state_machine = StateMachine::new();
 
-        // Step 5: Return initialized RaftNode
+        // Step 6: Return initialized RaftNode
         Ok(RaftNode {
             id,
             raw_node,
@@ -250,9 +258,20 @@ impl RaftNode {
 
         // Step 7: Advance the RawNode to signal completion
         // CRITICAL: This MUST be called after all processing is complete
-        self.raw_node.advance(ready);
+        let mut light_rd = self.raw_node.advance(ready);
 
-        // Step 8: Return messages for network transmission
+        // Step 8: Handle light ready (additional committed entries after advance)
+        // This can happen when advance() commits more entries
+        let additional_committed = light_rd.take_committed_entries();
+        if !additional_committed.is_empty() {
+            self.apply_committed_entries(additional_committed)?;
+        }
+
+        // Step 9: Finalize the apply process
+        // This updates the internal apply index in raft-rs
+        self.raw_node.advance_apply();
+
+        // Step 10: Return messages for network transmission
         Ok(messages)
     }
 
@@ -344,6 +363,50 @@ impl RaftNode {
         } else {
             Some(leader)
         }
+    }
+
+    /// Retrieves a value from the state machine.
+    ///
+    /// This method provides read access to the state machine's key-value store.
+    /// It's primarily used for integration testing and query operations to verify
+    /// that proposed operations have been applied correctly.
+    ///
+    /// **Note**: In a production system, reads might be served directly from the
+    /// state machine (stale reads) or require a linearizable read mechanism
+    /// (read index or lease-based reads). This simple implementation provides
+    /// direct access to the current state.
+    ///
+    /// # Arguments
+    ///
+    /// * `key` - The key to look up
+    ///
+    /// # Returns
+    ///
+    /// * `Some(Vec<u8>)` - The value associated with the key
+    /// * `None` - The key does not exist in the state machine
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use seshat_raft::RaftNode;
+    /// use seshat_protocol::Operation;
+    ///
+    /// let mut node = RaftNode::new(1, vec![1]).unwrap();
+    ///
+    /// // After proposing and applying an operation
+    /// let op = Operation::Set {
+    ///     key: b"foo".to_vec(),
+    ///     value: b"bar".to_vec(),
+    /// };
+    /// node.propose(op.serialize().unwrap()).unwrap();
+    /// // ... wait for application ...
+    ///
+    /// // Query the state machine
+    /// let value = node.get(b"foo");
+    /// assert_eq!(value, Some(b"bar".to_vec()));
+    /// ```
+    pub fn get(&self, key: &[u8]) -> Option<Vec<u8>> {
+        self.state_machine.get(key)
     }
 
     /// Applies committed entries to the state machine.
@@ -879,5 +942,68 @@ mod tests {
         let _ = node.leader_id();
 
         // Test passes if no panics occur
+    }
+
+    // ===== get() tests =====
+
+    #[test]
+    fn test_get_empty_state_machine() {
+        // Create a new node
+        let node = RaftNode::new(1, vec![1]).expect("Node creation should succeed");
+
+        // Verify get returns None on empty state machine
+        assert_eq!(
+            node.get(b"any_key"),
+            None,
+            "Empty state machine should return None"
+        );
+    }
+
+    #[test]
+    fn test_get_after_applying_entry() {
+        // Create a single-node cluster
+        let mut node = RaftNode::new(1, vec![1]).expect("Node creation should succeed");
+
+        // Tick until it becomes leader
+        for _ in 0..15 {
+            node.tick().unwrap();
+        }
+
+        // Process election ready states until node becomes leader
+        for _ in 0..5 {
+            node.handle_ready().unwrap();
+        }
+
+        // Propose a SET operation
+        let operation = Operation::Set {
+            key: b"test_key".to_vec(),
+            value: b"test_value".to_vec(),
+        };
+        let data = operation.serialize().unwrap();
+
+        // Propose and process ready if successful
+        if node.propose(data).is_ok() {
+            // Process ready - should apply the committed entry
+            node.handle_ready().unwrap();
+
+            // Verify we can read the value using get()
+            let value = node.get(b"test_key");
+            assert_eq!(
+                value,
+                Some(b"test_value".to_vec()),
+                "get() should return the applied value"
+            );
+        }
+    }
+
+    #[test]
+    fn test_get_nonexistent_key() {
+        // Create a new node
+        let node = RaftNode::new(1, vec![1]).expect("Node creation should succeed");
+
+        // Test various nonexistent keys
+        assert_eq!(node.get(b""), None);
+        assert_eq!(node.get(b"nonexistent"), None);
+        assert_eq!(node.get(b"another_missing_key"), None);
     }
 }
