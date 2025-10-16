@@ -683,7 +683,7 @@ mod tests {
     #[test]
     fn test_debug_simple_string() {
         let value = RespValue::SimpleString(Bytes::from("OK"));
-        let debug = format!("{:?}", value);
+        let debug = format!("{value:?}");
         assert!(debug.contains("SimpleString"));
         assert!(debug.contains("OK"));
     }
@@ -691,7 +691,7 @@ mod tests {
     #[test]
     fn test_debug_integer() {
         let value = RespValue::Integer(42);
-        let debug = format!("{:?}", value);
+        let debug = format!("{value:?}");
         assert!(debug.contains("Integer"));
         assert!(debug.contains("42"));
     }
@@ -699,14 +699,14 @@ mod tests {
     #[test]
     fn test_debug_null() {
         let value = RespValue::Null;
-        let debug = format!("{:?}", value);
+        let debug = format!("{value:?}");
         assert!(debug.contains("Null"));
     }
 
     #[test]
     fn test_debug_array() {
         let value = RespValue::Array(Some(vec![RespValue::Integer(1)]));
-        let debug = format!("{:?}", value);
+        let debug = format!("{value:?}");
         assert!(debug.contains("Array"));
         assert!(debug.contains("Integer"));
     }
@@ -717,7 +717,7 @@ mod tests {
             format: *b"txt",
             data: Bytes::from("hello"),
         };
-        let debug = format!("{:?}", value);
+        let debug = format!("{value:?}");
         assert!(debug.contains("VerbatimString"));
         assert!(debug.contains("format"));
     }
@@ -729,7 +729,7 @@ mod tests {
         let size = std::mem::size_of::<RespValue>();
         // This is informational - RespValue should be reasonably sized
         // Typical size is around 32-48 bytes depending on platform
-        println!("RespValue size: {} bytes", size);
+        println!("RespValue size: {size} bytes");
         // We don't assert a specific size, but this helps track enum size
         assert!(size > 0);
     }

@@ -239,7 +239,7 @@ mod tests {
                 Some(b"mykey".as_ref())
             );
         } else {
-            panic!("Expected Array, got {:?}", value);
+            panic!("Expected Array, got {value:?}");
         }
     }
 
@@ -264,7 +264,7 @@ mod tests {
                 Some(b"value".as_ref())
             );
         } else {
-            panic!("Expected Array, got {:?}", value);
+            panic!("Expected Array, got {value:?}");
         }
     }
 
@@ -281,7 +281,7 @@ mod tests {
                 Some(b"PING".as_ref())
             );
         } else {
-            panic!("Expected Array, got {:?}", value);
+            panic!("Expected Array, got {value:?}");
         }
     }
 
@@ -422,8 +422,7 @@ mod tests {
         let result = InlineCommandParser::parse(b"SET key \"quote\\\"here\"\r\n");
         assert!(
             result.is_ok(),
-            "Command with escaped quote should parse: {:?}",
-            result
+            "Command with escaped quote should parse: {result:?}"
         );
 
         let value = result.unwrap();

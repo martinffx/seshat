@@ -2422,7 +2422,7 @@ mod tests {
     fn test_parse_long_simple_string() {
         let mut parser = RespParser::new();
         let long_str = "a".repeat(10000);
-        let mut buf = BytesMut::from(format!("+{}\r\n", long_str).as_bytes());
+        let mut buf = BytesMut::from(format!("+{long_str}\r\n").as_bytes());
 
         let result = parser.parse(&mut buf).unwrap();
         assert_eq!(result, Some(RespValue::SimpleString(Bytes::from(long_str))));
@@ -2459,7 +2459,7 @@ mod tests {
         // Create array with 100 integers
         let mut buf = BytesMut::from("*100\r\n");
         for i in 0..100 {
-            buf.extend_from_slice(format!(":{}\r\n", i).as_bytes());
+            buf.extend_from_slice(format!(":{i}\r\n").as_bytes());
         }
 
         let result = parser.parse(&mut buf).unwrap();
