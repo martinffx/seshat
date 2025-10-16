@@ -441,7 +441,7 @@ proptest! {
         let mut parser = RespParser::new().with_max_bulk_size(max_size);
 
         // Try to parse bulk string larger than limit
-        let mut buf = BytesMut::from(format!("${}\r\n", size).as_bytes());
+        let mut buf = BytesMut::from(format!("${size}\r\n").as_bytes());
 
         let result = parser.parse(&mut buf);
 
@@ -458,7 +458,7 @@ proptest! {
         let mut parser = RespParser::new().with_max_array_len(max_len);
 
         // Try to parse array larger than limit
-        let mut buf = BytesMut::from(format!("*{}\r\n", size).as_bytes());
+        let mut buf = BytesMut::from(format!("*{size}\r\n").as_bytes());
 
         let result = parser.parse(&mut buf);
 
