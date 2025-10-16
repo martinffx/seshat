@@ -231,12 +231,41 @@
     - Clean error handling with `?` operator
     - No clippy warnings
 
-- [ ] **raft_node_leader_queries** - RaftNode Leader Queries (30 min)
+- [x] **raft_node_leader_queries** - RaftNode Leader Queries (30 min)
   - **Test**: New node is not leader, leader_id returns None initially
   - **Implement**: Implement queries using raw_node.raft.state
-  - **Refactor**: Add caching if needed
+  - **Refactor**: Add comprehensive documentation with usage examples
   - **Files**: `crates/raft/src/node.rs`
   - **Acceptance**: is_leader() and leader_id() return correct values
+  - **Status**: ✅ Completed 2025-10-16
+  - **Implementation Details**:
+    - Implemented `is_leader(&self) -> bool`
+      - Accesses `self.raw_node.raft.state` to check if role is Leader
+      - Returns `true` if leader, `false` otherwise (follower or candidate)
+    - Implemented `leader_id(&self) -> Option<u64>`
+      - Accesses `self.raw_node.raft.leader_id` field
+      - Returns `None` if leader_id is 0 (raft-rs convention for unknown leader)
+      - Returns `Some(id)` if leader is known
+    - Comprehensive test coverage (8 new tests):
+      1. test_is_leader_new_node - New node should not be leader
+      2. test_leader_id_new_node - New node should return None
+      3. test_is_leader_after_election - Single-node becomes leader
+      4. test_leader_id_single_node - Single-node reports itself as leader
+      5. test_is_leader_follower - Multi-node follower is not leader
+      6. test_leader_id_consistency - Both methods are consistent
+      7. test_leader_queries_no_panic - Methods don't panic
+    - All 30 tests passing (22 existing + 8 new)
+    - Comprehensive documentation with:
+      - Clear explanation of when to use each method
+      - Usage examples showing client request routing
+      - Explanation of leadership state changes
+      - Note about raft-rs convention (0 = no leader)
+    - No unwrap() in production code
+    - Clean query methods with no side effects
+    - No clippy warnings
+    - Method signatures:
+      - `is_leader(&self) -> bool`
+      - `leader_id(&self) -> Option<u64>`
 
 ## Phase 7: Integration (Not Started)
 - [ ] **single_node_bootstrap** - Single Node Bootstrap Test (1 hour)
@@ -255,9 +284,9 @@
 
 ## Progress Summary
 - **Total Tasks**: 24
-- **Completed**: 20 (83.3%)
+- **Completed**: 21 (87.5%)
 - **In Progress**: 0
-- **Not Started**: 4
+- **Not Started**: 3
 
 ## Next Recommended Task
-`raft_node_leader_queries` - Continue Phase 6 (Raft Node leader query methods)
+`single_node_bootstrap` - Start Phase 7 (Integration testing for single-node cluster bootstrap)

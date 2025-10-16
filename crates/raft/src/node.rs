@@ -256,6 +256,96 @@ impl RaftNode {
         Ok(messages)
     }
 
+    /// Checks if this node is currently the Raft cluster leader.
+    ///
+    /// This method queries the internal Raft state to determine if the node is
+    /// currently in the Leader role. The leadership status can change over time
+    /// due to elections, network partitions, or other cluster events.
+    ///
+    /// # Returns
+    ///
+    /// * `true` - This node is the leader and can accept client proposals
+    /// * `false` - This node is a follower or candidate
+    ///
+    /// # Usage
+    ///
+    /// Use this method to decide whether to process client requests locally or
+    /// redirect them to the leader:
+    ///
+    /// ```no_run
+    /// use seshat_raft::RaftNode;
+    /// # use seshat_protocol::Operation;
+    ///
+    /// let mut node = RaftNode::new(1, vec![1, 2, 3]).unwrap();
+    ///
+    /// // Check if this node can handle writes
+    /// if node.is_leader() {
+    ///     // Process client request directly
+    ///     let op = Operation::Set {
+    ///         key: b"key".to_vec(),
+    ///         value: b"value".to_vec(),
+    ///     };
+    ///     node.propose(op.serialize().unwrap()).unwrap();
+    /// } else {
+    ///     // Redirect to leader
+    ///     if let Some(leader) = node.leader_id() {
+    ///         println!("Redirect to leader: {}", leader);
+    ///     }
+    /// }
+    /// ```
+    pub fn is_leader(&self) -> bool {
+        // Access the internal Raft state through the RawNode
+        // The state_role() method returns the current role (Leader, Follower, Candidate)
+        self.raw_node.raft.state == raft::StateRole::Leader
+    }
+
+    /// Returns the current leader's node ID, if known.
+    ///
+    /// This method queries the internal Raft state to get the current leader's ID.
+    /// The leader ID may be unknown during elections or network partitions.
+    ///
+    /// # Returns
+    ///
+    /// * `Some(id)` - The current leader's node ID
+    /// * `None` - No leader is currently known (during election or partition)
+    ///
+    /// # Usage
+    ///
+    /// Use this method to redirect client requests to the current leader:
+    ///
+    /// ```no_run
+    /// use seshat_raft::RaftNode;
+    ///
+    /// let node = RaftNode::new(1, vec![1, 2, 3]).unwrap();
+    ///
+    /// match node.leader_id() {
+    ///     Some(leader) if leader == 1 => {
+    ///         println!("I am the leader");
+    ///     }
+    ///     Some(leader) => {
+    ///         println!("Redirect to leader node {}", leader);
+    ///     }
+    ///     None => {
+    ///         println!("No leader known - election in progress");
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// # Note
+    ///
+    /// In raft-rs, a leader_id of 0 means no leader is known. This method
+    /// returns `None` in that case for a more idiomatic Rust API.
+    pub fn leader_id(&self) -> Option<u64> {
+        // Access the internal Raft state to get the leader ID
+        // raft-rs uses 0 to indicate no leader, so we return None in that case
+        let leader = self.raw_node.raft.leader_id;
+        if leader == 0 {
+            None
+        } else {
+            Some(leader)
+        }
+    }
+
     /// Applies committed entries to the state machine.
     ///
     /// This helper method processes entries that have been committed by the Raft
@@ -692,5 +782,106 @@ mod tests {
             let result = node.handle_ready();
             assert!(result.is_ok(), "handle_ready should succeed in event loop");
         }
+    }
+
+    // ===== is_leader() and leader_id() tests =====
+
+    #[test]
+    fn test_is_leader_new_node() {
+        // Create a new node
+        let node = RaftNode::new(1, vec![1, 2, 3]).expect("Node creation should succeed");
+
+        // New node should not be leader initially
+        assert!(!node.is_leader(), "New node should not be leader");
+    }
+
+    #[test]
+    fn test_leader_id_new_node() {
+        // Create a new node
+        let node = RaftNode::new(1, vec![1, 2, 3]).expect("Node creation should succeed");
+
+        // New node should return None for leader_id
+        assert_eq!(
+            node.leader_id(),
+            None,
+            "New node should not know the leader"
+        );
+    }
+
+    #[test]
+    fn test_is_leader_returns_bool() {
+        // Create a node
+        let node = RaftNode::new(1, vec![1, 2, 3]).expect("Node creation should succeed");
+
+        // Test that is_leader() returns a boolean value
+        let result = node.is_leader();
+
+        // Should return false for a new node (no panics)
+        assert!(!result, "New node should not be leader");
+    }
+
+    #[test]
+    fn test_leader_id_returns_option() {
+        // Create a node
+        let node = RaftNode::new(1, vec![1, 2, 3]).expect("Node creation should succeed");
+
+        // Test that leader_id() returns Option<u64>
+        let result = node.leader_id();
+
+        // Should return None for a new node (no leader known yet)
+        assert_eq!(result, None, "New node should not know the leader");
+    }
+
+    #[test]
+    fn test_is_leader_follower() {
+        // Create a multi-node cluster node
+        let node = RaftNode::new(2, vec![1, 2, 3]).expect("Node creation should succeed");
+
+        // Multi-node cluster node is not leader initially
+        assert!(
+            !node.is_leader(),
+            "Multi-node cluster follower should not be leader"
+        );
+    }
+
+    #[test]
+    fn test_leader_id_consistency() {
+        // Create a single-node cluster
+        let mut node = RaftNode::new(1, vec![1]).expect("Node creation should succeed");
+
+        // Before election, should not be leader
+        assert!(!node.is_leader());
+        assert_eq!(node.leader_id(), None);
+
+        // Tick until election
+        for _ in 0..15 {
+            node.tick().unwrap();
+        }
+
+        // Process ready to complete election
+        for _ in 0..5 {
+            node.handle_ready().unwrap();
+        }
+
+        // After election, both methods should be consistent
+        if node.is_leader() {
+            assert_eq!(
+                node.leader_id(),
+                Some(1),
+                "If is_leader() is true, leader_id() should match node ID"
+            );
+        }
+    }
+
+    #[test]
+    fn test_leader_queries_no_panic() {
+        // Create a node
+        let node = RaftNode::new(1, vec![1, 2, 3]).expect("Node creation should succeed");
+
+        // Both methods should work without panic on new node
+        let _ = node.is_leader();
+        let _ = node.leader_id();
+
+        // Test passes if no panics occur
     }
 }
