@@ -577,7 +577,7 @@ mod tests {
 
         // Propose multiple times
         for i in 0..5 {
-            let data = format!("proposal {}", i).into_bytes();
+            let data = format!("proposal {i}").into_bytes();
             let _ = node.propose(data);
             // Test passes if all proposals can be submitted without panicking
         }
@@ -630,9 +630,7 @@ mod tests {
 
         assert!(
             term_after >= term_before,
-            "Hard state term should be persisted (before: {}, after: {})",
-            term_before,
-            term_after
+            "Hard state term should be persisted (before: {term_before}, after: {term_after})"
         );
     }
 
@@ -671,9 +669,7 @@ mod tests {
             let entries_after = node.raw_node.store().last_index().unwrap();
             assert!(
                 entries_after >= entries_before,
-                "Entries should be persisted (before: {}, after: {})",
-                entries_before,
-                entries_after
+                "Entries should be persisted (before: {entries_before}, after: {entries_after})"
             );
         }
     }

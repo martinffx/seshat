@@ -771,8 +771,8 @@ mod tests {
         // Create a state machine with many keys
         let mut sm = StateMachine::new();
         for i in 0..100 {
-            let key = format!("key{}", i).into_bytes();
-            let value = format!("value{}", i).into_bytes();
+            let key = format!("key{i}").into_bytes();
+            let value = format!("value{i}").into_bytes();
             let op = Operation::Set { key, value };
             let data = op.serialize().expect("Serialization should succeed");
             sm.apply(i + 1, &data).expect("Apply should succeed");
@@ -787,8 +787,8 @@ mod tests {
 
         // Verify all 100 keys are present
         for i in 0..100 {
-            let key = format!("key{}", i).into_bytes();
-            let expected_value = format!("value{}", i).into_bytes();
+            let key = format!("key{i}").into_bytes();
+            let expected_value = format!("value{i}").into_bytes();
             assert_eq!(sm2.get(&key), Some(expected_value));
         }
         assert_eq!(sm2.last_applied(), 100);
