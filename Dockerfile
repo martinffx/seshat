@@ -1,5 +1,5 @@
 # Multi-stage build for Seshat
-FROM rust:1.90-slim as builder
+FROM rust:1.90 as builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -12,18 +12,31 @@ RUN apt-get update && apt-get install -y \
 # Create app directory
 WORKDIR /app
 
-# Copy manifests
+# Copy manifests for dependency caching
 COPY Cargo.toml Cargo.lock ./
-COPY crates ./crates
+COPY crates/seshat/Cargo.toml ./crates/seshat/Cargo.toml
+COPY crates/raft/Cargo.toml ./crates/raft/Cargo.toml
+COPY crates/storage/Cargo.toml ./crates/storage/Cargo.toml
+COPY crates/protocol/Cargo.toml ./crates/protocol/Cargo.toml
+COPY crates/common/Cargo.toml ./crates/common/Cargo.toml
 
-# Build dependencies (cached layer)
-RUN mkdir -p crates/seshat/src && \
-    echo "fn main() {}" > crates/seshat/src/main.rs && \
-    cargo build --release && \
-    rm -rf crates/*/src
+# Create dummy source files to build dependencies
+RUN mkdir -p crates/seshat/src && echo "fn main() {}" > crates/seshat/src/main.rs && \
+    mkdir -p crates/raft/src && echo "pub fn placeholder() {}" > crates/raft/src/lib.rs && \
+    mkdir -p crates/storage/src && echo "pub fn placeholder() {}" > crates/storage/src/lib.rs && \
+    mkdir -p crates/protocol/src && echo "pub fn placeholder() {}" > crates/protocol/src/lib.rs && \
+    mkdir -p crates/common/src && echo "pub fn placeholder() {}" > crates/common/src/lib.rs
+
+# Build dependencies (this layer is cached)
+RUN cargo build --release
+
+# Remove dummy source
+RUN rm -rf crates/*/src
+
+# Copy real source code
+COPY crates ./crates
 
 # Build application
-COPY crates ./crates
 RUN cargo build --release --bin seshat
 
 # Runtime stage
@@ -33,6 +46,9 @@ FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     libssl3 \
+    libsnappy1v5 \
+    liblz4-1 \
+    libzstd1 \
     && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
@@ -52,10 +68,6 @@ USER seshat
 
 # Expose ports
 EXPOSE 6379 7379
-
-# Health check
-HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 \
-    CMD ["sh", "-c", "command -v curl || exit 0; curl -f http://localhost:8080/health || exit 1"]
 
 ENTRYPOINT ["seshat"]
 CMD ["--config", "/app/config/node.toml"]
