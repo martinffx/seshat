@@ -693,6 +693,38 @@ impl Default for MemStorage {
     }
 }
 
+impl raft::Storage for MemStorage {
+    fn initial_state(&self) -> raft::Result<RaftState> {
+        self.initial_state()
+    }
+
+    fn entries(
+        &self,
+        low: u64,
+        high: u64,
+        max_size: impl Into<Option<u64>>,
+        _context: raft::GetEntriesContext,
+    ) -> raft::Result<Vec<Entry>> {
+        self.entries(low, high, max_size.into())
+    }
+
+    fn term(&self, idx: u64) -> raft::Result<u64> {
+        self.term(idx)
+    }
+
+    fn first_index(&self) -> raft::Result<u64> {
+        self.first_index()
+    }
+
+    fn last_index(&self) -> raft::Result<u64> {
+        self.last_index()
+    }
+
+    fn snapshot(&self, request_index: u64, _to: u64) -> raft::Result<Snapshot> {
+        self.snapshot(request_index)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

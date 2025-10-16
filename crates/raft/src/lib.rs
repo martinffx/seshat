@@ -5,11 +5,13 @@
 //! architecture.
 
 pub mod config;
+pub mod node;
 pub mod state_machine;
 pub mod storage;
 
 // Re-export main types for convenience
 pub use config::{ClusterConfig, InitialMember, NodeConfig, RaftConfig};
+pub use node::RaftNode;
 pub use state_machine::StateMachine;
 pub use storage::MemStorage;
 
