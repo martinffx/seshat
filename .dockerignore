@@ -1,0 +1,47 @@
+# Build artifacts
+target/
+**/*.rs.bk
+
+# Git
+.git/
+.gitignore
+worktrees/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime data
+data*/
+/logs
+*.log
+/backups
+/snapshots
+
+# Config overrides
+config/local.toml
+config/local*.toml
+
+# Mise
+.mise.toml
+.mise.*.toml
+mise.toml
+
+# Documentation
+*.md
+docs/
+
+# CI/CD
+.github/
+
+# Docker
+Dockerfile
+.dockerignore
+docker-compose.yml
