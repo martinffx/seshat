@@ -440,6 +440,18 @@ impl RaftNode {
                 continue;
             }
 
+            // Defensive check: verify entries are applied in order
+            // This should never happen with correct raft-rs usage, but we check anyway
+            let last_applied = self.state_machine.last_applied();
+            if entry.index <= last_applied {
+                eprintln!(
+                    "WARNING: Skipping already applied entry {} (last_applied: {}). \
+                     This indicates a bug in entry delivery or state machine consistency.",
+                    entry.index, last_applied
+                );
+                continue;
+            }
+
             // Apply the entry to the state machine
             // The state machine handles deserialization and idempotency checks
             self.state_machine.apply(entry.index, &entry.data)?;

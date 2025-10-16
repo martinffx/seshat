@@ -8,6 +8,27 @@
 //!
 //! All fields are wrapped in `RwLock` to provide thread-safe concurrent access.
 //! Multiple readers can access the data simultaneously, but writers have exclusive access.
+//!
+//! ## Lock Poisoning Philosophy
+//!
+//! This implementation uses `.expect()` instead of `.unwrap()` for lock acquisition
+//! to provide clear error messages when lock poisoning occurs. Lock poisoning indicates
+//! that a thread panicked while holding the lock, leaving the data in a potentially
+//! inconsistent state.
+//!
+//! **For Phase 1 (MemStorage)**: Lock poisoning is considered a serious bug that should
+//! cause the application to panic immediately with a descriptive message. This approach
+//! is acceptable because:
+//! 1. MemStorage is used for testing and single-node scenarios
+//! 2. Lock poisoning indicates a critical bug in the concurrent access logic
+//! 3. Continuing with poisoned state would lead to data corruption
+//!
+//! **For Future Production Storage (RocksDB)**: Lock poisoning should be handled gracefully
+//! by returning a proper error through the Raft error system, allowing the node to
+//! potentially recover or fail safely without cascading panics.
+//!
+//! The `.expect()` messages clearly identify which lock failed, making debugging easier
+//! during development and testing.
 
 use prost::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
@@ -112,8 +133,14 @@ impl MemStorage {
     /// Returns an error if:
     /// - Lock acquisition fails (lock poisoning)
     pub fn initial_state(&self) -> raft::Result<RaftState> {
-        let hard_state = self.hard_state.read().unwrap();
-        let conf_state = self.conf_state.read().unwrap();
+        let hard_state = self
+            .hard_state
+            .read()
+            .expect("Hard state lock poisoned - indicates bug in concurrent access");
+        let conf_state = self
+            .conf_state
+            .read()
+            .expect("Conf state lock poisoned - indicates bug in concurrent access");
 
         Ok(RaftState {
             hard_state: hard_state.clone(),
@@ -145,7 +172,10 @@ impl MemStorage {
     /// assert_eq!(state.hard_state.commit, 10);
     /// ```
     pub fn set_hard_state(&self, hs: HardState) {
-        *self.hard_state.write().unwrap() = hs;
+        *self
+            .hard_state
+            .write()
+            .expect("Hard state lock poisoned - indicates bug in concurrent access") = hs;
     }
 
     /// Sets the configuration state of the storage.
@@ -168,7 +198,10 @@ impl MemStorage {
     /// assert_eq!(state.conf_state.voters, vec![1, 2, 3]);
     /// ```
     pub fn set_conf_state(&self, cs: ConfState) {
-        *self.conf_state.write().unwrap() = cs;
+        *self
+            .conf_state
+            .write()
+            .expect("Conf state lock poisoned - indicates bug in concurrent access") = cs;
     }
 
     /// Returns a range of log entries.
@@ -207,9 +240,30 @@ impl MemStorage {
             return Ok(Vec::new());
         }
 
-        // Check bounds
-        let first = self.first_index()?;
-        let last = self.last_index()?;
+        // Acquire all locks once for consistent state (fixes TOCTOU race)
+        let snapshot = self
+            .snapshot
+            .read()
+            .expect("Snapshot lock poisoned - indicates bug in concurrent access");
+        let entries = self
+            .entries
+            .read()
+            .expect("Entries lock poisoned - indicates bug in concurrent access");
+
+        // Calculate first and last indices from locked state
+        let first = if snapshot.get_metadata().index > 0 {
+            snapshot.get_metadata().index + 1
+        } else if !entries.is_empty() {
+            entries[0].index
+        } else {
+            1
+        };
+
+        let last = if let Some(last_entry) = entries.last() {
+            last_entry.index
+        } else {
+            snapshot.get_metadata().index
+        };
 
         // Check if low is before first available entry (compacted)
         if low < first {
@@ -221,9 +275,6 @@ impl MemStorage {
         if high > last + 1 {
             return Err(raft::Error::Store(StorageError::Unavailable));
         }
-
-        // Get read lock on entries
-        let entries = self.entries.read().unwrap();
 
         // Handle empty log
         if entries.is_empty() {
@@ -320,17 +371,38 @@ impl MemStorage {
             return Ok(0);
         }
 
-        // Get bounds
-        let first = self.first_index()?;
-        let last = self.last_index()?;
+        // Acquire locks once for consistent state
+        let snapshot = self
+            .snapshot
+            .read()
+            .expect("Snapshot lock poisoned - indicates bug in concurrent access");
+        let entries = self
+            .entries
+            .read()
+            .expect("Entries lock poisoned - indicates bug in concurrent access");
+
+        // Calculate bounds from locked state
+        let first = if snapshot.get_metadata().index > 0 {
+            snapshot.get_metadata().index + 1
+        } else if !entries.is_empty() {
+            entries[0].index
+        } else {
+            1
+        };
+
+        let last = if let Some(last_entry) = entries.last() {
+            last_entry.index
+        } else {
+            snapshot.get_metadata().index
+        };
+
+        // Check if this is exactly the snapshot index
+        if index == snapshot.get_metadata().index {
+            return Ok(snapshot.get_metadata().term);
+        }
 
         // Check if index is before first available entry (compacted)
         if index < first {
-            // Special case: check if this is the snapshot index
-            let snapshot = self.snapshot.read().unwrap();
-            if index == snapshot.get_metadata().index {
-                return Ok(snapshot.get_metadata().term);
-            }
             return Err(raft::Error::Store(StorageError::Compacted));
         }
 
@@ -338,15 +410,6 @@ impl MemStorage {
         if index > last {
             return Err(raft::Error::Store(StorageError::Unavailable));
         }
-
-        // Check if this is exactly the snapshot index
-        let snapshot = self.snapshot.read().unwrap();
-        if index == snapshot.get_metadata().index {
-            return Ok(snapshot.get_metadata().term);
-        }
-
-        // Get the entry from the log
-        let entries = self.entries.read().unwrap();
 
         // Handle empty log (shouldn't happen given bounds checks, but be safe)
         if entries.is_empty() {
@@ -384,8 +447,14 @@ impl MemStorage {
     /// assert_eq!(storage.first_index().unwrap(), 1);
     /// ```
     pub fn first_index(&self) -> raft::Result<u64> {
-        let snapshot = self.snapshot.read().unwrap();
-        let entries = self.entries.read().unwrap();
+        let snapshot = self
+            .snapshot
+            .read()
+            .expect("Snapshot lock poisoned - indicates bug in concurrent access");
+        let entries = self
+            .entries
+            .read()
+            .expect("Entries lock poisoned - indicates bug in concurrent access");
 
         if snapshot.get_metadata().index > 0 {
             Ok(snapshot.get_metadata().index + 1)
@@ -415,8 +484,14 @@ impl MemStorage {
     /// assert_eq!(storage.last_index().unwrap(), 0);
     /// ```
     pub fn last_index(&self) -> raft::Result<u64> {
-        let entries = self.entries.read().unwrap();
-        let snapshot = self.snapshot.read().unwrap();
+        let entries = self
+            .entries
+            .read()
+            .expect("Entries lock poisoned - indicates bug in concurrent access");
+        let snapshot = self
+            .snapshot
+            .read()
+            .expect("Snapshot lock poisoned - indicates bug in concurrent access");
 
         if let Some(last) = entries.last() {
             Ok(last.index)
@@ -468,7 +543,10 @@ impl MemStorage {
     pub fn snapshot(&self, _request_index: u64) -> raft::Result<Snapshot> {
         // Phase 1: Simplified implementation
         // Just return the current snapshot, ignoring request_index
-        let snapshot = self.snapshot.read().unwrap();
+        let snapshot = self
+            .snapshot
+            .read()
+            .expect("Snapshot lock poisoned - indicates bug in concurrent access");
         Ok(snapshot.clone())
     }
 
@@ -495,7 +573,10 @@ impl MemStorage {
     /// storage.append(&entries);
     /// ```
     pub fn append(&self, ents: &[Entry]) {
-        let mut entries = self.entries.write().unwrap();
+        let mut entries = self
+            .entries
+            .write()
+            .expect("Entries lock poisoned - indicates bug in concurrent access");
         entries.extend_from_slice(ents);
     }
 
@@ -551,10 +632,23 @@ impl MemStorage {
         let snap_term = snapshot.get_metadata().term;
 
         // Acquire write locks in consistent order to prevent deadlocks
-        let mut storage_snapshot = self.snapshot.write().unwrap();
-        let mut entries = self.entries.write().unwrap();
-        let mut hard_state = self.hard_state.write().unwrap();
-        let mut conf_state = self.conf_state.write().unwrap();
+        // Lock ordering: snapshot → entries → hard_state → conf_state (documented to prevent deadlocks)
+        let mut storage_snapshot = self
+            .snapshot
+            .write()
+            .expect("Snapshot lock poisoned - indicates bug in concurrent access");
+        let mut entries = self
+            .entries
+            .write()
+            .expect("Entries lock poisoned - indicates bug in concurrent access");
+        let mut hard_state = self
+            .hard_state
+            .write()
+            .expect("Hard state lock poisoned - indicates bug in concurrent access");
+        let mut conf_state = self
+            .conf_state
+            .write()
+            .expect("Conf state lock poisoned - indicates bug in concurrent access");
 
         // Replace snapshot
         *storage_snapshot = snapshot.clone();
@@ -635,7 +729,10 @@ impl MemStorage {
         }
 
         // Acquire write lock on entries
-        let mut storage_entries = self.entries.write().unwrap();
+        let mut storage_entries = self
+            .entries
+            .write()
+            .expect("Entries lock poisoned - indicates bug in concurrent access");
 
         // If storage is empty, just append all entries
         if storage_entries.is_empty() {
@@ -648,7 +745,13 @@ impl MemStorage {
         let storage_offset = storage_entries[0].index;
 
         // If new entries start after our log, just append
-        if first_new_index > storage_entries.last().unwrap().index {
+        // Note: storage_entries is guaranteed non-empty by check above
+        if first_new_index
+            > storage_entries
+                .last()
+                .expect("Storage entries non-empty - checked above")
+                .index
+        {
             storage_entries.extend_from_slice(entries);
             return Ok(());
         }
