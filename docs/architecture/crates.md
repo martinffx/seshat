@@ -1,20 +1,25 @@
 # Crate Architecture
 
-Seshat uses a workspace structure with five crates, each with clear responsibilities and boundaries.
+Seshat uses a workspace structure with six crates, each with clear responsibilities and boundaries.
 
 ## Dependency Graph
 
 ```
 seshat (binary)
-  ├─> protocol
+  ├─> protocol-resp
+  ├─> kv
   ├─> raft
   ├─> storage
   └─> common
 
-protocol
+protocol-resp
+  └─> common
+
+kv
   └─> common
 
 raft
+  ├─> kv
   ├─> storage
   └─> common
 
@@ -43,44 +48,62 @@ common (no dependencies)
 - `Runtime`: Tokio runtime and task management
 
 **Does NOT**:
-- Implement protocol parsing (delegates to `protocol`)
+- Implement protocol parsing (delegates to `protocol-resp`)
 - Implement consensus logic (delegates to `raft`)
 - Directly access storage (goes through `storage`)
 
 ---
 
-### `protocol/` - Network Protocol Handlers
+### `kv/` - Key-Value Operations
 
-**Purpose**: Handle client and internal network protocols
+**Purpose**: Domain logic for key-value operations
 
 **Responsibilities**:
+- Define KV operation types (Set, Get, Delete)
+- Operation serialization/deserialization
+- Domain-specific error handling
+- Operation validation logic
+
+**Key Types**:
+- `Operation`: Enum of all KV operations (Set, Del)
+- `OperationResult`: Result type for KV operations
+- `OperationError`: KV-specific errors
+
+**Dependencies**:
+- `serde`: Serialization framework
+- `bincode`: Binary serialization for Raft proposals
+- `thiserror`: Error derivation
+
+**Does NOT**:
+- Parse wire protocols (delegates to `protocol-resp`)
+- Execute operations (delegates to Raft/storage)
+- Manage consensus (delegates to `raft`)
+
+---
+
+### `protocol-resp/` - RESP2 Protocol Handler
+
+**Purpose**: Handle Redis RESP2 wire protocol
+
+**Current Status**: Placeholder crate for future implementation
+
+**Future Responsibilities**:
 - **RESP Protocol**: Redis Serialization Protocol parser and serializer
   - Parse incoming Redis commands (GET, SET, DEL, EXISTS, PING)
   - Serialize responses in RESP format
   - Handle protocol errors and edge cases
-- **gRPC Internal RPC**: Raft message transport
-  - `RaftService` gRPC service definition
-  - Message serialization using Protobuf
-  - Connection pooling and retry logic
-- **Future**: PostgreSQL wire protocol (Phase 5+)
+- **TCP Framing**: Tokio codec for RESP2 framing
 
-**Key Types**:
+**Future Key Types**:
 - `RespCodec`: Tokio codec for RESP framing
 - `RespCommand`: Parsed command enum
 - `RespValue`: Response type
-- `RaftRpcClient`: gRPC client for inter-node communication
-- `RaftRpcServer`: gRPC server implementation
 
-**Dependencies**:
+**Future Dependencies**:
 - `tokio`: Async I/O and codec framework
-- `tonic`: gRPC framework
-- `prost`: Protobuf serialization
 - `bytes`: Efficient byte buffer handling
 
-**Does NOT**:
-- Execute commands (returns parsed commands to caller)
-- Manage Raft state (sends messages to `raft`)
-- Access storage directly
+**Note**: RESP implementation will be merged from `feat/resp` branch when ready.
 
 ---
 
@@ -96,27 +119,35 @@ common (no dependencies)
 - Membership changes (add/remove nodes)
 - Snapshot creation and restoration
 - Log compaction triggers
+- Re-export raft-rs message types for transport layer
 
 **Key Types**:
 - `RaftNode`: Wrapper around `raft::RawNode`
-- `RaftStorage`: Implements `raft::Storage` trait
-- `RaftMessage`: Internal message passing
-- `RaftProposal`: Client request wrapper
-- `StateMachine`: Apply committed log entries
+- `StateMachine`: Apply committed log entries using `kv::Operation`
+- `MemStorage`: In-memory implementation of raft-rs `Storage` trait
+- Re-exported from raft-rs: `Message`, `Entry`, `MessageType`, `Snapshot`
 
-**Raft Groups**:
+**Raft Groups** (Future):
 - **System Raft Group**: Cluster metadata (one instance, all nodes participate)
 - **Data Raft Groups**: Key-value data (multiple instances, one per shard in Phase 2+)
 
 **Dependencies**:
-- `raft-rs`: Core consensus algorithm
-- `storage`: Persistent log and snapshot storage
-- `protocol`: gRPC transport for Raft messages
+- `raft` (raft-rs): Core consensus algorithm with built-in message types
+- `seshat-kv`: KV operations for state machine
+- `seshat-common`: Shared types
+- `serde`, `bincode`: Serialization
+- `tokio`: Async runtime
+- `slog`: Logging
+
+**Transport Layer**:
+- This crate uses raft-rs's built-in message types (`raft::prelude::Message`)
+- Transport layer (gRPC, TCP, etc.) should be implemented separately
+- Network layer serializes/deserializes `Message` for transmission
 
 **Does NOT**:
-- Parse client protocols (receives parsed commands)
+- Parse client protocols (receives `kv::Operation` from caller)
+- Implement network transport (provides message types, not transport)
 - Decide when to compact (receives triggers from storage)
-- Expose network endpoints (delegates to protocol)
 
 ---
 
@@ -209,48 +240,50 @@ common (no dependencies)
 
 ## Module Interaction Patterns
 
-### Client Request Flow (GET command)
+### Client Request Flow (GET command) - Future
 
 ```
 1. Client sends: GET foo
-2. protocol::RespCodec parses → RespCommand::Get("foo")
+2. protocol-resp::RespCodec parses → RespCommand::Get("foo")
 3. seshat::Node receives command
 4. seshat::Node checks: is this node leader for data shard?
 5. If leader:
    - Read from storage::Storage (data_kv CF)
-   - protocol::RespCodec serializes response
+   - protocol-resp::RespCodec serializes response
    - Send back to client
 6. If not leader:
    - Look up leader from raft::RaftNode
-   - protocol::RaftRpcClient forwards to leader
+   - Transport layer forwards to leader
    - Receive response, forward to client
 ```
 
-### Client Write Flow (SET command)
+### Client Write Flow (SET command) - Future
 
 ```
 1. Client sends: SET foo bar
-2. protocol::RespCodec parses → RespCommand::Set("foo", "bar")
-3. seshat::Node receives command
+2. protocol-resp::RespCodec parses → RespCommand::Set("foo", "bar")
+3. seshat::Node converts to kv::Operation::Set
 4. seshat::Node routes to raft::RaftNode
-5. raft::RaftNode.propose(SET foo bar)
-6. raft-rs replicates log entry to followers via protocol::RaftRpcServer
+5. raft::RaftNode.propose(kv::Operation::Set)
+6. raft-rs replicates log entry to followers via transport layer
 7. Once majority commits, raft::StateMachine.apply() called
-8. storage::Storage writes to data_kv CF
-9. Response returned to client
+8. StateMachine executes kv::Operation
+9. storage::Storage writes to data_kv CF
+10. Response returned to client
 ```
 
-### Raft Heartbeat Flow
+### Raft Message Flow (Heartbeats/Replication)
 
 ```
 1. raft::RaftNode (leader) ticks every 100ms
-2. raft-rs generates AppendEntries messages
-3. raft::RaftNode sends via protocol::RaftRpcClient
-4. Target node's protocol::RaftRpcServer receives
-5. Passes to target's raft::RaftNode
-6. raft-rs processes, generates response
-7. Response sent back via gRPC
-8. Leader's raft::RaftNode updates follower progress
+2. raft-rs generates raft::Message (AppendEntries)
+3. raft::RaftNode passes Message to transport layer
+4. Transport layer (gRPC/TCP) serializes and sends Message
+5. Target node's transport receives and deserializes Message
+6. Passes to target's raft::RaftNode
+7. raft-rs processes, generates response Message
+8. Response sent back via transport layer
+9. Leader's raft::RaftNode updates follower progress
 ```
 
 ### Snapshot Creation Flow
@@ -299,22 +332,29 @@ common (no dependencies)
 
 When adding PostgreSQL support (Phase 5+):
 
-1. **New module in `protocol/`**: `protocol::postgres`
+1. **New crate**: `protocol-sql/`
    - Implement PostgreSQL wire protocol parser
    - Support basic SQL commands (SELECT, INSERT, UPDATE, DELETE)
-   - Translate SQL to key-value operations
+   - Minimal crate, similar to `protocol-resp/`
 
-2. **No changes needed in**:
+2. **New crate**: `sql/`
+   - SQL-specific domain logic
+   - Translate SQL operations to storage operations
+   - Similar role to `kv/` but for SQL
+
+3. **Binary mode selection in `seshat/`**:
+   - Command-line flag: `--mode {redis|postgres}`
+   - Start either `protocol-resp` OR `protocol-sql` listener
+   - Use either `kv/` OR `sql/` domain logic
+   - **Cannot run both modes simultaneously**
+   - **Different data files for each mode**
+
+4. **No changes needed in**:
    - `raft/`: Same consensus layer
    - `storage/`: Same RocksDB backend
    - `common/`: Shared types remain
 
-3. **Changes in `seshat/`**:
-   - Add PostgreSQL listener alongside Redis listener
-   - Route SQL commands through same Raft layer
-   - Both protocols share same distributed storage
-
-This demonstrates the power of the layered architecture - adding a new protocol is isolated to the protocol layer, with minimal changes elsewhere.
+This demonstrates the power of the layered architecture - adding a new protocol requires new protocol and domain crates, but the consensus and storage layers remain unchanged.
 
 ---
 

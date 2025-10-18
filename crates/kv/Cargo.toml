@@ -1,23 +1,16 @@
 [package]
-name = "seshat-protocol"
+name = "seshat-kv"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description.workspace = true
+description = "Key-value service implementation for Seshat"
 keywords.workspace = true
 
 [dependencies]
-tonic = { workspace = true }
-prost = { workspace = true }
-bytes = { workspace = true }
 serde = { workspace = true }
 bincode = { workspace = true }
 thiserror = { workspace = true }
 
-[build-dependencies]
-tonic-build = { workspace = true }
-
 [dev-dependencies]
-tokio = { workspace = true }

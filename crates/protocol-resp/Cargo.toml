@@ -1,0 +1,17 @@
+[package]
+name = "seshat-protocol-resp"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "RESP2 protocol implementation for Seshat"
+keywords.workspace = true
+
+[dependencies]
+# RESP protocol dependencies will be added when implemented
+# bytes = { workspace = true }
+# tokio = { workspace = true }
+# thiserror = { workspace = true }
+
+[dev-dependencies]

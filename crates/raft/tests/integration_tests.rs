@@ -3,7 +3,7 @@
 //! These tests verify end-to-end behavior of the Raft node, including
 //! cluster bootstrap, leader election, and command replication.
 
-use seshat_protocol::Operation;
+use seshat_kv::Operation;
 use std::time::Duration;
 
 mod common;

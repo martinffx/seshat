@@ -4,7 +4,7 @@
 //! log index. It provides basic operations for reading and querying the state.
 
 use serde::{Deserialize, Serialize};
-use seshat_protocol::Operation;
+use seshat_kv::Operation;
 use std::collections::HashMap;
 
 /// State machine that maintains key-value store state.
@@ -138,7 +138,7 @@ impl StateMachine {
     ///
     /// ```
     /// use seshat_raft::StateMachine;
-    /// use seshat_protocol::Operation;
+    /// use seshat_kv::Operation;
     ///
     /// let mut sm = StateMachine::new();
     /// let op = Operation::Set {
@@ -193,7 +193,7 @@ impl StateMachine {
     ///
     /// ```
     /// use seshat_raft::StateMachine;
-    /// use seshat_protocol::Operation;
+    /// use seshat_kv::Operation;
     ///
     /// let mut sm = StateMachine::new();
     /// let op = Operation::Set {
@@ -229,7 +229,7 @@ impl StateMachine {
     ///
     /// ```
     /// use seshat_raft::StateMachine;
-    /// use seshat_protocol::Operation;
+    /// use seshat_kv::Operation;
     ///
     /// let mut sm1 = StateMachine::new();
     /// let op = Operation::Set {

@@ -1,0 +1,109 @@
+syntax = "proto3";
+
+package transport;
+
+// RaftTransport service for inter-node Raft message communication.
+//
+// Each node runs a gRPC server implementing this service to receive
+// messages from peers, and uses clients to send messages to peers.
+service RaftTransport {
+  // Send a Raft message to this node.
+  //
+  // The receiving node will queue the message for processing by its
+  // Raft state machine. This RPC returns immediately after enqueuing.
+  rpc SendMessage(RaftMessage) returns (SendMessageResponse);
+}
+
+// Response for SendMessage RPC
+message SendMessageResponse {
+  // True if message was successfully enqueued for processing
+  bool success = 1;
+
+  // Error message if success = false
+  string error = 2;
+}
+
+// Message types matching raft::eraftpb::MessageType
+enum MessageType {
+  MSG_HUP = 0;
+  MSG_BEAT = 1;
+  MSG_PROPOSE = 2;
+  MSG_APPEND = 3;
+  MSG_APPEND_RESPONSE = 4;
+  MSG_REQUEST_VOTE = 5;
+  MSG_REQUEST_VOTE_RESPONSE = 6;
+  MSG_SNAPSHOT = 7;
+  MSG_HEARTBEAT = 8;
+  MSG_HEARTBEAT_RESPONSE = 9;
+  MSG_UNREACHABLE = 10;
+  MSG_SNAP_STATUS = 11;
+  MSG_CHECK_QUORUM = 12;
+  MSG_TRANSFER_LEADER = 13;
+  MSG_TIMEOUT_NOW = 14;
+  MSG_READ_INDEX = 15;
+  MSG_READ_INDEX_RESP = 16;
+  MSG_REQUEST_PRE_VOTE = 17;
+  MSG_REQUEST_PRE_VOTE_RESPONSE = 18;
+}
+
+// Entry types matching raft::eraftpb::EntryType
+enum EntryType {
+  ENTRY_NORMAL = 0;
+  ENTRY_CONF_CHANGE = 1;
+  ENTRY_CONF_CHANGE_V2 = 2;
+}
+
+// Entry matching raft::eraftpb::Entry
+message Entry {
+  EntryType entry_type = 1;
+  uint64 term = 2;
+  uint64 index = 3;
+  bytes data = 4;
+  bytes context = 6;
+  bool sync_log = 5;  // Deprecated, kept for compatibility
+}
+
+// ConfState matching raft::eraftpb::ConfState
+message ConfState {
+  repeated uint64 voters = 1;
+  repeated uint64 learners = 2;
+  repeated uint64 voters_outgoing = 3;
+  repeated uint64 learners_next = 4;
+  bool auto_leave = 5;
+}
+
+// SnapshotMetadata matching raft::eraftpb::SnapshotMetadata
+message SnapshotMetadata {
+  ConfState conf_state = 1;
+  uint64 index = 2;
+  uint64 term = 3;
+}
+
+// Snapshot matching raft::eraftpb::Snapshot
+message Snapshot {
+  bytes data = 1;
+  SnapshotMetadata metadata = 2;
+}
+
+// RaftMessage matching raft::eraftpb::Message
+//
+// This is our wire format for Raft messages. It mirrors eraftpb::Message
+// to allow conversion between our protobuf and raft-rs's protobuf.
+message RaftMessage {
+  MessageType msg_type = 1;
+  uint64 to = 2;
+  uint64 from = 3;
+  uint64 term = 4;
+  uint64 log_term = 5;
+  uint64 index = 6;
+  repeated Entry entries = 7;
+  uint64 commit = 8;
+  uint64 commit_term = 15;
+  Snapshot snapshot = 9;
+  uint64 request_snapshot = 13;
+  bool reject = 10;
+  uint64 reject_hint = 11;
+  bytes context = 12;
+  uint64 deprecated_priority = 14;
+  int64 priority = 16;
+}

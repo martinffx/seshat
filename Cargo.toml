@@ -4,7 +4,8 @@ members = [
     "crates/seshat",
     "crates/raft",
     "crates/storage",
-    "crates/protocol",
+    "crates/protocol-resp",
+    "crates/kv",
     "crates/common",
 ]
 

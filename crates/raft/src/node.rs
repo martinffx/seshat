@@ -139,7 +139,7 @@ impl RaftNode {
     ///
     /// ```no_run
     /// use seshat_raft::RaftNode;
-    /// # use seshat_protocol::Operation;
+    /// # use seshat_kv::Operation;
     ///
     /// let mut node = RaftNode::new(1, vec![1, 2, 3]).unwrap();
     ///
@@ -293,7 +293,7 @@ impl RaftNode {
     ///
     /// ```no_run
     /// use seshat_raft::RaftNode;
-    /// # use seshat_protocol::Operation;
+    /// # use seshat_kv::Operation;
     ///
     /// let mut node = RaftNode::new(1, vec![1, 2, 3]).unwrap();
     ///
@@ -389,7 +389,7 @@ impl RaftNode {
     ///
     /// ```no_run
     /// use seshat_raft::RaftNode;
-    /// use seshat_protocol::Operation;
+    /// use seshat_kv::Operation;
     ///
     /// let mut node = RaftNode::new(1, vec![1]).unwrap();
     ///
@@ -464,7 +464,7 @@ impl RaftNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use seshat_protocol::Operation;
+    use seshat_kv::Operation;
 
     #[test]
     fn test_new_creates_node_successfully() {

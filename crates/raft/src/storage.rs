@@ -30,7 +30,7 @@
 //! The `.expect()` messages clearly identify which lock failed, making debugging easier
 //! during development and testing.
 
-use prost::Message;
+use prost_old::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};
 use raft::{RaftState, StorageError};
 use std::sync::RwLock;

@@ -51,7 +51,7 @@ impl Operation {
     /// # Examples
     ///
     /// ```
-    /// use seshat_protocol::Operation;
+    /// use seshat_kv::Operation;
     /// use std::collections::HashMap;
     ///
     /// let mut state = HashMap::new();
@@ -89,7 +89,7 @@ impl Operation {
     /// # Examples
     ///
     /// ```
-    /// use seshat_protocol::Operation;
+    /// use seshat_kv::Operation;
     ///
     /// let op = Operation::Set {
     ///     key: b"foo".to_vec(),
@@ -116,7 +116,7 @@ impl Operation {
     /// # Examples
     ///
     /// ```
-    /// use seshat_protocol::Operation;
+    /// use seshat_kv::Operation;
     ///
     /// let op = Operation::Set {
     ///     key: b"foo".to_vec(),
