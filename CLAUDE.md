@@ -120,7 +120,7 @@ docs/
 seshat/          - Main binary, orchestration
 raft/            - Raft consensus wrapper
 storage/         - RocksDB persistence layer
-protocol/        - RESP and gRPC protocols
+protocol-resp/   - RESP and gRPC protocols
 common/          - Shared types and utilities
 ```
 

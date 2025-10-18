@@ -18,7 +18,7 @@ Implement modern Redis Serialization Protocol (RESP3) for robust, high-performan
 - `bytes` for byte handling
 
 ## Implementation Crate
-`protocol`
+`protocol-resp`
 
 ## Technical Challenges
 - Zero-copy parsing

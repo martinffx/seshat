@@ -4,7 +4,7 @@
 //! encoding multiple RESP messages.
 
 use bytes::Bytes;
-use seshat_protocol::{BufferPool, RespEncoder, RespValue};
+use seshat_protocol_resp::{BufferPool, RespEncoder, RespValue};
 
 fn main() {
     // Create a buffer pool with 4KB buffers

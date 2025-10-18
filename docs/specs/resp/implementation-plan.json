@@ -38,7 +38,7 @@
       "title": "Implement ProtocolError types with thiserror",
       "phase": "foundation",
       "order": 1,
-      "file": "crates/protocol/src/error.rs",
+      "file": "crates/protocol-resp/src/error.rs",
       "description": "Define comprehensive protocol error types using thiserror for parsing, encoding, and command validation errors",
       "acceptance_criteria": [
         "ProtocolError enum with 12+ variants covering all error cases",
@@ -99,7 +99,7 @@
       "title": "Implement RespValue enum with all 14 RESP3 types",
       "phase": "foundation",
       "order": 2,
-      "file": "crates/protocol/src/types.rs",
+      "file": "crates/protocol-resp/src/types.rs",
       "description": "Define RespValue enum covering all 14 RESP3 data types using bytes::Bytes for zero-copy efficiency",
       "acceptance_criteria": [
         "RespValue enum with 14 variants (5 RESP2 + 9 RESP3)",
@@ -152,7 +152,7 @@
       "title": "Implement RespValue helper methods",
       "phase": "foundation",
       "order": 3,
-      "file": "crates/protocol/src/types.rs",
+      "file": "crates/protocol-resp/src/types.rs",
       "description": "Add convenience methods to RespValue for common operations like null checking, type extraction, and size estimation",
       "acceptance_criteria": [
         "is_null() returns true for all null representations",
@@ -207,7 +207,7 @@
       "title": "Implement parser for simple RESP types (SimpleString, Error, Integer, Null, Boolean)",
       "phase": "core_protocol",
       "order": 4,
-      "file": "crates/protocol/src/parser.rs",
+      "file": "crates/protocol-resp/src/parser.rs",
       "description": "Implement streaming state machine parser for simple RESP3 types that don't require length prefixes",
       "acceptance_criteria": [
         "RespParser struct with ParseState enum",
@@ -269,7 +269,7 @@
       "title": "Implement parser for BulkString with length prefix and size limits",
       "phase": "core_protocol",
       "order": 5,
-      "file": "crates/protocol/src/parser.rs",
+      "file": "crates/protocol-resp/src/parser.rs",
       "description": "Add BulkString parsing to state machine with configurable size limits and null handling",
       "acceptance_criteria": [
         "Parses BulkString: $5\\r\\nhello\\r\\n",
@@ -332,7 +332,7 @@
       "title": "Implement recursive array parser with nesting depth limits",
       "phase": "core_protocol",
       "order": 6,
-      "file": "crates/protocol/src/parser.rs",
+      "file": "crates/protocol-resp/src/parser.rs",
       "description": "Add Array parsing with recursive element parsing and configurable depth limits",
       "acceptance_criteria": [
         "Parses Array: *2\\r\\n$3\\r\\nGET\\r\\n$3\\r\\nkey\\r\\n",
@@ -396,7 +396,7 @@
       "title": "Implement parser for additional RESP3 types (Double, BigNumber, Map, Set, etc.)",
       "phase": "core_protocol",
       "order": 7,
-      "file": "crates/protocol/src/parser.rs",
+      "file": "crates/protocol-resp/src/parser.rs",
       "description": "Complete parser by adding all remaining RESP3-specific types",
       "acceptance_criteria": [
         "Parses Double: ,1.23\\r\\n, inf, -inf, nan",
@@ -460,7 +460,7 @@
       "title": "Implement encoder for RESP2-compatible types",
       "phase": "core_protocol",
       "order": 8,
-      "file": "crates/protocol/src/encoder.rs",
+      "file": "crates/protocol-resp/src/encoder.rs",
       "description": "Implement RespEncoder for serializing RESP values to bytes, starting with RESP2 types",
       "acceptance_criteria": [
         "RespEncoder struct with encode() method",
@@ -527,7 +527,7 @@
       "title": "Implement encoder for RESP3-specific types",
       "phase": "core_protocol",
       "order": 9,
-      "file": "crates/protocol/src/encoder.rs",
+      "file": "crates/protocol-resp/src/encoder.rs",
       "description": "Complete encoder by adding all RESP3-specific type serialization",
       "acceptance_criteria": [
         "Encodes Null: _\\r\\n",
@@ -595,7 +595,7 @@
       "title": "Implement inline command parser for telnet compatibility",
       "phase": "core_protocol",
       "order": 10,
-      "file": "crates/protocol/src/inline.rs",
+      "file": "crates/protocol-resp/src/inline.rs",
       "description": "Add inline command parsing to support telnet-style commands (GET key\\r\\n)",
       "acceptance_criteria": [
         "InlineCommandParser struct",
@@ -659,7 +659,7 @@
       "title": "Implement Tokio Decoder/Encoder for RespCodec",
       "phase": "integration",
       "order": 11,
-      "file": "crates/protocol/src/codec.rs",
+      "file": "crates/protocol-resp/src/codec.rs",
       "description": "Integrate parser and encoder with Tokio's codec framework for async I/O",
       "acceptance_criteria": [
         "RespCodec struct wrapping RespParser",
@@ -721,7 +721,7 @@
       "title": "Implement RespCommand parser for Phase 1 commands",
       "phase": "integration",
       "order": 12,
-      "file": "crates/protocol/src/command.rs",
+      "file": "crates/protocol-resp/src/command.rs",
       "description": "Define RespCommand enum and parser for GET, SET, DEL, EXISTS, PING commands",
       "acceptance_criteria": [
         "RespCommand enum with 5 variants (GET, SET, DEL, EXISTS, PING)",
@@ -789,7 +789,7 @@
       "title": "Implement buffer pool for efficient encoding",
       "phase": "integration",
       "order": 13,
-      "file": "crates/protocol/src/lib.rs",
+      "file": "crates/protocol-resp/src/lib.rs",
       "description": "Add optional buffer pool for reusing BytesMut allocations during encoding",
       "acceptance_criteria": [
         "BufferPool struct for managing BytesMut instances",
@@ -852,7 +852,7 @@
       "title": "Implement property-based tests with proptest",
       "phase": "testing_validation",
       "order": 14,
-      "file": "crates/protocol/src/tests/property_tests.rs",
+      "file": "crates/protocol-resp/src/tests/property_tests.rs",
       "description": "Add comprehensive property tests for fuzzing and roundtrip verification",
       "acceptance_criteria": [
         "Arbitrary RespValue generator with depth control",
@@ -910,7 +910,7 @@
       "title": "Implement parser/encoder integration tests",
       "phase": "testing_validation",
       "order": 15,
-      "file": "crates/protocol/src/tests/parser_tests.rs",
+      "file": "crates/protocol-resp/src/tests/parser_tests.rs",
       "description": "Add integration tests covering complete parsing scenarios including pipelining and partial data",
       "acceptance_criteria": [
         "Tests for all 14 RESP3 types",
@@ -973,7 +973,7 @@
       "title": "Implement Tokio codec integration tests",
       "phase": "testing_validation",
       "order": 16,
-      "file": "crates/protocol/src/tests/codec_tests.rs",
+      "file": "crates/protocol-resp/src/tests/codec_tests.rs",
       "description": "Add async integration tests for Tokio codec using real TCP connections",
       "acceptance_criteria": [
         "Tests with real TcpListener/TcpStream",
@@ -1036,7 +1036,7 @@
       "title": "Implement criterion benchmarks for performance validation",
       "phase": "testing_validation",
       "order": 17,
-      "file": "crates/protocol/benches/resp_benchmark.rs",
+      "file": "crates/protocol-resp/benches/resp_benchmark.rs",
       "description": "Add comprehensive benchmarks to verify >50K ops/sec and <100μs latency targets",
       "acceptance_criteria": [
         "Benchmarks for parsing all RESP types",

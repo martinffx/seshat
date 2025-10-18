@@ -16,7 +16,7 @@ impl RespEncoder {
     /// # Examples
     ///
     /// ```
-    /// use seshat_protocol::{RespEncoder, RespValue};
+    /// use seshat_protocol_resp::{RespEncoder, RespValue};
     /// use bytes::{Bytes, BytesMut};
     ///
     /// let mut buf = BytesMut::new();

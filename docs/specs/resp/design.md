@@ -52,7 +52,7 @@ Command Handler Layer (separate feature)
 ## Module Structure
 
 ```
-protocol/
+protocol-resp/
 ├── Cargo.toml
 ├── src/
 │   ├── lib.rs              # Public API exports
@@ -1208,7 +1208,7 @@ mod integration_tests {
 
 ```toml
 [package]
-name = "protocol"
+name = "protocol-resp"
 version = "0.1.0"
 edition = "2021"
 
@@ -1291,7 +1291,7 @@ The implementation follows Rust best practices with type safety, zero-cost abstr
 ---
 
 **Files Referenced**:
-- `/Users/martinrichards/code/seshat/worktrees/resp/docs/specs/resp-protocol/design.md`
+- `/Users/martinrichards/code/seshat/worktrees/resp/docs/specs/resp/design.md`
 - `/Users/martinrichards/code/seshat/worktrees/resp/docs/standards/tech.md`
 - `/Users/martinrichards/code/seshat/worktrees/resp/docs/standards/practices.md`
 - `/Users/martinrichards/code/seshat/worktrees/resp/docs/architecture/crates.md`

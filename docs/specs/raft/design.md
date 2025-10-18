@@ -198,7 +198,7 @@ impl StateMachine {
 }
 ```
 
-**Operation Types** (defined in protocol crate):
+**Operation Types** (defined in protocol-resp crate):
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Operation {
@@ -401,7 +401,7 @@ pub struct StateMachine {
 
 **Port**: 7379
 
-**Protobuf Definition** (protocol/proto/raft.proto):
+**Protobuf Definition** (protocol-resp/proto/raft.proto):
 
 ```protobuf
 syntax = "proto3";
@@ -554,7 +554,7 @@ tonic-build = "0.11"
 
 **Module Layout**:
 ```
-protocol/
+protocol-resp/
 ├── proto/
 │   └── raft.proto          // Raft RPC definitions
 ├── src/
@@ -909,7 +909,7 @@ mod config_tests {
 }
 ```
 
-#### 4. Protobuf Tests (protocol crate)
+#### 4. Protobuf Tests (protocol-resp crate)
 ```rust
 #[cfg(test)]
 mod protobuf_tests {
@@ -1052,7 +1052,7 @@ seshat/
 │   │   │   └── node_tests.rs
 │   │   └── Cargo.toml
 │   │
-│   ├── protocol/
+│   ├── protocol-resp/
 │   │   ├── proto/
 │   │   │   └── raft.proto        // Protobuf definitions
 │   │   ├── src/
@@ -1091,7 +1091,7 @@ raft crate depends on:
   - serde, bincode (serialization)
   - thiserror (error handling)
 
-protocol crate depends on:
+protocol-resp crate depends on:
   - common (Error types)
   - tonic 0.11+ (gRPC framework)
   - prost 0.12+ (Protobuf serialization)

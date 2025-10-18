@@ -6,12 +6,12 @@ Seshat uses a workspace structure with five crates, each with clear responsibili
 
 ```
 seshat (binary)
-  ├─> protocol
+  ├─> protocol-resp
   ├─> raft
   ├─> storage
   └─> common
 
-protocol
+protocol-resp
   └─> common
 
 raft
@@ -43,13 +43,13 @@ common (no dependencies)
 - `Runtime`: Tokio runtime and task management
 
 **Does NOT**:
-- Implement protocol parsing (delegates to `protocol`)
+- Implement protocol parsing (delegates to `protocol-resp`)
 - Implement consensus logic (delegates to `raft`)
 - Directly access storage (goes through `storage`)
 
 ---
 
-### `protocol/` - Network Protocol Handlers
+### `protocol-resp/` - Network Protocol Handlers
 
 **Purpose**: Handle client and internal network protocols
 
@@ -111,7 +111,7 @@ common (no dependencies)
 **Dependencies**:
 - `raft-rs`: Core consensus algorithm
 - `storage`: Persistent log and snapshot storage
-- `protocol`: gRPC transport for Raft messages
+- `protocol-resp`: gRPC transport for Raft messages
 
 **Does NOT**:
 - Parse client protocols (receives parsed commands)
@@ -203,7 +203,7 @@ common (no dependencies)
 **Does NOT**:
 - Contain business logic
 - Depend on any other Seshat crate
-- Include protocol-specific types (those go in `protocol`)
+- Include protocol-specific types (those go in `protocol-resp`)
 
 ---
 
@@ -213,16 +213,16 @@ common (no dependencies)
 
 ```
 1. Client sends: GET foo
-2. protocol::RespCodec parses → RespCommand::Get("foo")
+2. protocol_resp::RespCodec parses → RespCommand::Get("foo")
 3. seshat::Node receives command
 4. seshat::Node checks: is this node leader for data shard?
 5. If leader:
    - Read from storage::Storage (data_kv CF)
-   - protocol::RespCodec serializes response
+   - protocol_resp::RespCodec serializes response
    - Send back to client
 6. If not leader:
    - Look up leader from raft::RaftNode
-   - protocol::RaftRpcClient forwards to leader
+   - protocol_resp::RaftRpcClient forwards to leader
    - Receive response, forward to client
 ```
 
@@ -230,11 +230,11 @@ common (no dependencies)
 
 ```
 1. Client sends: SET foo bar
-2. protocol::RespCodec parses → RespCommand::Set("foo", "bar")
+2. protocol_resp::RespCodec parses → RespCommand::Set("foo", "bar")
 3. seshat::Node receives command
 4. seshat::Node routes to raft::RaftNode
 5. raft::RaftNode.propose(SET foo bar)
-6. raft-rs replicates log entry to followers via protocol::RaftRpcServer
+6. raft-rs replicates log entry to followers via protocol_resp::RaftRpcServer
 7. Once majority commits, raft::StateMachine.apply() called
 8. storage::Storage writes to data_kv CF
 9. Response returned to client
@@ -245,8 +245,8 @@ common (no dependencies)
 ```
 1. raft::RaftNode (leader) ticks every 100ms
 2. raft-rs generates AppendEntries messages
-3. raft::RaftNode sends via protocol::RaftRpcClient
-4. Target node's protocol::RaftRpcServer receives
+3. raft::RaftNode sends via protocol_resp::RaftRpcClient
+4. Target node's protocol_resp::RaftRpcServer receives
 5. Passes to target's raft::RaftNode
 6. raft-rs processes, generates response
 7. Response sent back via gRPC
@@ -269,7 +269,7 @@ common (no dependencies)
 
 ## Testing Strategy by Crate
 
-### `protocol/` Tests
+### `protocol-resp/` Tests
 - Unit tests: RESP parser/serializer correctness
 - Property tests: Round-trip parsing with `proptest`
 - Integration tests: gRPC client-server communication
@@ -299,7 +299,7 @@ common (no dependencies)
 
 When adding PostgreSQL support (Phase 5+):
 
-1. **New module in `protocol/`**: `protocol::postgres`
+1. **New module in `protocol-resp/`**: `protocol_resp::postgres`
    - Implement PostgreSQL wire protocol parser
    - Support basic SQL commands (SELECT, INSERT, UPDATE, DELETE)
    - Translate SQL to key-value operations

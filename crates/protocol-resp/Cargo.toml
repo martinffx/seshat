@@ -1,5 +1,5 @@
 [package]
-name = "seshat-protocol"
+name = "seshat-protocol-resp"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

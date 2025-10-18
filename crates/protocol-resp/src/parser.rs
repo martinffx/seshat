@@ -17,7 +17,7 @@ use crate::{ProtocolError, RespValue, Result};
 ///
 /// ```
 /// use bytes::BytesMut;
-/// use seshat_protocol::parser::RespParser;
+/// use seshat_protocol_resp::parser::RespParser;
 ///
 /// let mut parser = RespParser::new();
 /// let mut buf = BytesMut::from("+OK\r\n");
@@ -159,7 +159,7 @@ impl RespParser {
     ///
     /// ```
     /// use bytes::BytesMut;
-    /// use seshat_protocol::parser::RespParser;
+    /// use seshat_protocol_resp::parser::RespParser;
     ///
     /// let mut parser = RespParser::new();
     /// let mut buf = BytesMut::from("+OK\r\n");

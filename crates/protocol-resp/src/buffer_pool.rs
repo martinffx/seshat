@@ -14,7 +14,7 @@ const DEFAULT_MAX_POOL_SIZE: usize = 100;
 /// # Examples
 ///
 /// ```
-/// use seshat_protocol::BufferPool;
+/// use seshat_protocol_resp::BufferPool;
 /// use bytes::BytesMut;
 ///
 /// let mut pool = BufferPool::new(4096);
@@ -45,7 +45,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```
-    /// use seshat_protocol::BufferPool;
+    /// use seshat_protocol_resp::BufferPool;
     ///
     /// let mut pool = BufferPool::new(4096);
     /// let buf = pool.acquire();
@@ -64,7 +64,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```
-    /// use seshat_protocol::BufferPool;
+    /// use seshat_protocol_resp::BufferPool;
     ///
     /// let mut pool = BufferPool::with_capacity(8192, 50);
     /// let buf = pool.acquire();
@@ -86,7 +86,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```
-    /// use seshat_protocol::BufferPool;
+    /// use seshat_protocol_resp::BufferPool;
     ///
     /// let mut pool = BufferPool::new(4096);
     /// let buf1 = pool.acquire();
@@ -111,7 +111,7 @@ impl BufferPool {
     /// # Examples
     ///
     /// ```
-    /// use seshat_protocol::BufferPool;
+    /// use seshat_protocol_resp::BufferPool;
     /// use bytes::BytesMut;
     ///
     /// let mut pool = BufferPool::new(4096);

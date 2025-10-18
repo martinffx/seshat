@@ -100,7 +100,7 @@ Implement Raft consensus for Seshat using the raft-rs library with in-memory sto
 ### Used By
 
 - seshat binary (main orchestration crate)
-- protocol crate (gRPC service definitions)
+- protocol-resp crate (gRPC service definitions)
 - storage crate (future RocksDB integration in rocksdb-storage spec)
 
 ## Technical Details

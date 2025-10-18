@@ -18,7 +18,7 @@ use crate::{ProtocolError, RespEncoder, RespParser, RespValue, Result};
 /// ```
 /// use tokio_util::codec::{Decoder, Encoder};
 /// use bytes::BytesMut;
-/// use seshat_protocol::{RespCodec, RespValue};
+/// use seshat_protocol_resp::{RespCodec, RespValue};
 ///
 /// let mut codec = RespCodec::new();
 /// let mut buf = BytesMut::from("+OK\r\n");

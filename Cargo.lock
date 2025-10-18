@@ -410,7 +410,7 @@ name = "seshat-common"
 version = "0.1.0"
 
 [[package]]
-name = "seshat-protocol"
+name = "seshat-protocol-resp"
 version = "0.1.0"
 dependencies = [
  "bytes",

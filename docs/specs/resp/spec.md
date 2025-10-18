@@ -103,7 +103,7 @@ As a Seshat distributed key-value store node, I want to implement the RESP proto
 ## Technical Details
 
 ### Crate
-- Primary implementation: `protocol` crate
+- Primary implementation: `protocol-resp` crate
 
 ### Key Types
 1. `RespValue` (enum for all RESP3 types)
