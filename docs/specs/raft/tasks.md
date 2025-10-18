@@ -14,7 +14,7 @@
   - **Test**: Message serialization/deserialization roundtrips
   - **Implement**: Create raft.proto with RequestVote, AppendEntries, InstallSnapshot messages
   - **Refactor**: Organize messages and add comprehensive comments
-  - **Files**: `crates/protocol/proto/raft.proto`, `crates/protocol/build.rs`, `crates/protocol/src/lib.rs`, `crates/protocol/Cargo.toml`
+  - **Files**: `crates/raft/proto/raft.proto`, `crates/raft/build.rs`, `crates/raft/src/lib.rs`, `crates/raft/Cargo.toml`
   - **Acceptance**: RaftService with 3 RPCs, 9 message types, EntryType enum, build.rs compiles proto, roundtrip tests pass
   - **Status**: ✅ Completed 2025-10-15
 
@@ -22,7 +22,7 @@
   - **Test**: Write tests for Operation::apply() and serialization
   - **Implement**: Define Operation enum with Set and Del variants
   - **Refactor**: Extract apply logic into trait methods
-  - **Files**: `crates/protocol/src/operations.rs`
+  - **Files**: `crates/raft/src/operations.rs`
   - **Acceptance**: Operation::Set and Operation::Del variants, apply() method, serialize/deserialize with bincode
   - **Status**: ✅ Completed 2025-10-15
   - **Implementation Details**:

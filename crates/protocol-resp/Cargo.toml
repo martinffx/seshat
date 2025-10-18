@@ -9,9 +9,11 @@ description = "RESP2 protocol implementation for Seshat"
 keywords.workspace = true
 
 [dependencies]
-# RESP protocol dependencies will be added when implemented
-# bytes = { workspace = true }
-# tokio = { workspace = true }
-# thiserror = { workspace = true }
+bytes = "1.5"
+thiserror = "1.0"
+tokio-util = { version = "0.7", features = ["codec"] }
 
 [dev-dependencies]
+proptest = "1.0"
+tokio = { version = "1", features = ["full", "test-util"] }
+futures = "0.3"

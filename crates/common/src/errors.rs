@@ -42,14 +42,6 @@ pub enum Error {
 /// Convenience type alias for Result with Seshat Error.
 pub type Result<T> = std::result::Result<T, Error>;
 
-// Conversion from raft::Error to our Error type
-#[cfg(feature = "raft-errors")]
-impl From<raft::Error> for Error {
-    fn from(err: raft::Error) -> Self {
-        Error::Raft(err.to_string())
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,22 +245,6 @@ mod tests {
         for err in errors {
             let display = err.to_string();
             assert!(!display.is_empty());
-        }
-    }
-
-    // Tests for raft::Error conversion (only compiled when raft-errors feature is enabled)
-    #[cfg(feature = "raft-errors")]
-    mod raft_conversion_tests {
-        use super::*;
-
-        #[test]
-        fn test_from_raft_error() {
-            // raft::Error doesn't have a simple constructor, so we'll test the From trait exists
-            // by using turbofish syntax to ensure the conversion compiles
-            fn takes_error(_err: Error) {}
-
-            // This test verifies that the From<raft::Error> implementation exists
-            // In actual usage, you would do: let err: Error = raft_error.into();
         }
     }
 }

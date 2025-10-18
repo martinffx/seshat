@@ -55,7 +55,7 @@ cargo clippy
 ```
 
 ### Current Status
-**Phase 1 (MVP)**: In planning - foundational architecture defined
+**Phase 1 (MVP)**: In progress - 38.4% complete (1/4 features done)
 
 **Available mise tasks**: Run `mise tasks` to see all available commands
 
@@ -100,7 +100,7 @@ docs/
 ### Key Documentation
 
 - **Start here**: `docs/product/product.md` - Product definition and Phase 1 goals
-- **Architecture**: `docs/architecture/crates.md` - How the 5 crates fit together
+- **Architecture**: `docs/architecture/crates.md` - How the 8 crates fit together
 - **Data design**: `docs/architecture/data-structures.md` - Core types with examples
 - **Tech decisions**: `docs/standards/tech.md` - Storage, networking, observability
 - **Development**: `docs/standards/practices.md` - TDD workflow and 11 chaos tests
@@ -111,26 +111,30 @@ docs/
 - **Rust 1.90+** (2021 edition)
 - **Consensus**: raft-rs (wraps with custom storage)
 - **Storage**: RocksDB with 6 column families
-- **Client Protocol**: Redis RESP2 on port 6379
-- **Internal RPC**: gRPC (tonic) on port 7379
+- **Client Protocol**: Redis RESP2/3 on port 6379 (Phase 1), PostgreSQL wire protocol on port 5432 (Phase 5)
+- **Internal RPC**: gRPC (tonic + prost) integrated in raft crate
 - **Observability**: OpenTelemetry + Prometheus (Phase 4)
 
 ### Crate Structure
 ```
 seshat/          - Main binary, orchestration
-raft/            - Raft consensus wrapper
+kv/              - Redis service, maps RESP to Raft
+sql/             - SQL service, maps SQL to Raft (Phase 5)
+protocol-resp/   - RESP protocol parser/encoder
+protocol-sql/    - PostgreSQL wire protocol (Phase 5)
+raft/            - Raft consensus + gRPC transport
 storage/         - RocksDB persistence layer
-protocol/        - RESP and gRPC protocols
 common/          - Shared types and utilities
 ```
 
 ### Phase 1 Features (MVP)
-- ✅ Raft consensus with leader election
-- ✅ Redis commands: GET, SET, DEL, EXISTS, PING
-- ✅ RocksDB persistent storage (6 column families)
-- ✅ gRPC internal communication
-- ✅ Log compaction and snapshots
-- ✅ 3-node cluster with fault tolerance
+- ✅ RESP protocol parser/encoder (100% complete - 487 tests)
+- ⏳ KV service layer (maps RESP to Raft)
+- ⏳ Raft consensus with leader election + gRPC transport
+- ⏳ RocksDB persistent storage (6 column families)
+- ⏳ Log compaction and snapshots
+- ⏳ 3-node cluster with fault tolerance
+- Redis commands: GET, SET, DEL, EXISTS, PING
 
 ### Success Criteria
 - 3-node cluster runs stably for 1+ hours

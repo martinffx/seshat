@@ -198,7 +198,7 @@ impl StateMachine {
 }
 ```
 
-**Operation Types** (defined in protocol crate):
+**Operation Types** (defined in raft crate):
 ```rust
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Operation {
@@ -401,7 +401,7 @@ pub struct StateMachine {
 
 **Port**: 7379
 
-**Protobuf Definition** (protocol/proto/raft.proto):
+**Protobuf Definition** (protocol-resp/proto/raft.proto):
 
 ```protobuf
 syntax = "proto3";
@@ -537,29 +537,39 @@ pub use common::{NodeId, Term, LogIndex, Error, Result};
 
 ---
 
-### Crate: `protocol`
+### Crate: `raft` (Transport Layer)
 
-**Dependencies**:
+**Note**: The raft crate now includes both consensus logic AND gRPC transport.
+
+**Additional Dependencies** (for gRPC transport):
 ```toml
 [dependencies]
 common = { path = "../common" }
-
+storage = { path = "../storage" }
+raft = "0.7"
+tokio = { version = "1", features = ["full"] }
 tonic = "0.11"
 prost = "0.12"
 serde = { version = "1.0", features = ["derive"] }
+bincode = "1.3"
 
 [build-dependencies]
 tonic-build = "0.11"
 ```
 
-**Module Layout**:
+**Module Layout** (transport additions):
 ```
-protocol/
+raft/
 ├── proto/
-│   └── raft.proto          // Raft RPC definitions
+│   └── raft.proto          // Raft RPC definitions (moved from protocol-resp)
 ├── src/
-│   ├── lib.rs              // Re-exports generated code
-│   └── operations.rs       // Operation enum (Set/Del)
+│   ├── lib.rs              // Module exports
+│   ├── config.rs           // Configuration types
+│   ├── storage.rs          // MemStorage (raft::Storage trait impl)
+│   ├── state_machine.rs    // StateMachine + operations
+│   ├── node.rs             // RaftNode wrapper
+│   ├── transport.rs        // gRPC client/server (NEW)
+│   └── operations.rs       // Operation enum (moved from protocol-resp)
 ├── build.rs                // Protobuf code generation
 └── Cargo.toml
 ```
@@ -909,7 +919,7 @@ mod config_tests {
 }
 ```
 
-#### 4. Protobuf Tests (protocol crate)
+#### 4. Protobuf Tests (raft crate)
 ```rust
 #[cfg(test)]
 mod protobuf_tests {
@@ -1052,7 +1062,7 @@ seshat/
 │   │   │   └── node_tests.rs
 │   │   └── Cargo.toml
 │   │
-│   ├── protocol/
+│   ├── protocol-resp/
 │   │   ├── proto/
 │   │   │   └── raft.proto        // Protobuf definitions
 │   │   ├── src/
@@ -1091,11 +1101,19 @@ raft crate depends on:
   - serde, bincode (serialization)
   - thiserror (error handling)
 
-protocol crate depends on:
+protocol-resp crate depends on:
   - common (Error types)
+  - bytes (zero-copy parsing)
+  - tokio-util (codec framework)
+
+raft crate depends on:
+  - common (Error types, NodeId, Term, LogIndex)
+  - storage (RocksDB persistence)
+  - raft-rs 0.7 (consensus algorithm)
   - tonic 0.11+ (gRPC framework)
   - prost 0.12+ (Protobuf serialization)
   - tonic-build (build-time codegen)
+  - tokio (async runtime)
 
 common crate depends on:
   - serde (serialization)

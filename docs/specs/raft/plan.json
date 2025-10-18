@@ -243,19 +243,19 @@
       "order": 6,
       "title": "Protobuf Message Definitions",
       "description": "Define Raft RPC message schemas in .proto file and configure build.rs",
-      "component": "protocol/raft_rpc",
+      "component": "protocol-resp/raft_rpc",
       "tdd_cycle": {
         "test": "Write tests for message serialization/deserialization roundtrips",
         "implement": "Create raft.proto with RequestVote, AppendEntries, InstallSnapshot messages",
         "refactor": "Organize messages and add comprehensive comments"
       },
       "files_to_create": [
-        "crates/protocol/proto/raft.proto",
-        "crates/protocol/build.rs",
-        "crates/protocol/src/lib.rs"
+        "crates/protocol-resp/proto/raft.proto",
+        "crates/protocol-resp/build.rs",
+        "crates/protocol-resp/src/lib.rs"
       ],
       "files_to_modify": [
-        "crates/protocol/Cargo.toml"
+        "crates/protocol-resp/Cargo.toml"
       ],
       "dependencies_to_add": {
         "common": { "path": "../common" },
@@ -266,7 +266,7 @@
       "build_dependencies_to_add": {
         "tonic-build": "0.11"
       },
-      "test_file": "crates/protocol/tests/protobuf_tests.rs",
+      "test_file": "crates/protocol-resp/tests/protobuf_tests.rs",
       "acceptance_criteria": [
         "raft.proto defines RaftService with RequestVote, AppendEntries, InstallSnapshot RPCs",
         "Message types: RequestVoteRequest/Response, AppendEntriesRequest/Response, etc.",
@@ -284,23 +284,23 @@
       "order": 7,
       "title": "Operation Types",
       "description": "Define Operation enum (Set, Del) with serialization and apply logic",
-      "component": "protocol/operations",
+      "component": "protocol-resp/operations",
       "tdd_cycle": {
         "test": "Write tests for Operation::apply() and serialization",
         "implement": "Define Operation enum with Set and Del variants",
         "refactor": "Extract apply logic into trait methods"
       },
       "files_to_create": [
-        "crates/protocol/src/operations.rs"
+        "crates/protocol-resp/src/operations.rs"
       ],
       "files_to_modify": [
-        "crates/protocol/src/lib.rs",
-        "crates/protocol/Cargo.toml"
+        "crates/protocol-resp/src/lib.rs",
+        "crates/protocol-resp/Cargo.toml"
       ],
       "dependencies_to_add": {
         "bincode": "1.3"
       },
-      "test_file": "crates/protocol/src/operations.rs (inline tests)",
+      "test_file": "crates/protocol-resp/src/operations.rs (inline tests)",
       "acceptance_criteria": [
         "Operation::Set { key, value } variant",
         "Operation::Del { key } variant",

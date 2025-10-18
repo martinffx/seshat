@@ -10,8 +10,3 @@ keywords.workspace = true
 
 [dependencies]
 thiserror = "1.0"
-raft = { version = "0.7", optional = true }
-
-[features]
-default = []
-raft-errors = ["raft"]

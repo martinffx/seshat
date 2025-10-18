@@ -22,10 +22,10 @@
         "Message routing for Raft RPCs"
       ]
     },
-    "protocol": {
+    "protocol-resp": {
       "responsibility": "gRPC service definitions for internal Raft messages, RESP protocol (Phase 1 focuses on gRPC)",
       "dependencies": ["common"],
-      "location": "crates/protocol/",
+      "location": "crates/protocol-resp/",
       "needs": [
         "Protobuf definitions for AppendEntries, RequestVote, InstallSnapshot",
         "gRPC client for sending Raft messages",
