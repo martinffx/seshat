@@ -53,3 +53,14 @@ Our roadmap is structured into four progressive phases, each building upon the p
   - Multi-datacenter replication
   - Compliance and certification
   - Performance optimizations
+
+## Phase 5: SQL Interface
+- Focus: Multi-protocol support
+- Key Deliverables:
+  - PostgreSQL wire protocol implementation (`protocol-sql` crate)
+  - SQL service layer (`sql` crate)
+  - Query planning and optimization
+  - Transaction management
+  - Schema validation
+  - SQL storage using RocksDB column families
+  - **Operator-configurable deployment**: Single RocksDB (simple) vs separate instances (isolated)
