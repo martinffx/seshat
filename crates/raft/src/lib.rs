@@ -6,7 +6,7 @@
 //! # Transport Layer
 //!
 //! The `transport` module provides gRPC-based networking for Raft messages:
-//! - Uses latest tonic 0.12 / prost 0.13 for the wire protocol
+//! - Uses latest tonic 0.14 / prost 0.14 for the wire protocol
 //! - Automatically converts between our protobuf and raft-rs's `eraftpb` types
 //! - Each node runs 1 server + N-1 clients (where N = cluster size)
 //!

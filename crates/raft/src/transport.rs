@@ -1,7 +1,7 @@
 //! gRPC transport layer for Raft messages
 //!
 //! This module provides the network transport for sending Raft messages between nodes.
-//! It uses gRPC with our own protobuf definitions (latest tonic 0.12 / prost 0.13) and
+//! It uses gRPC with our own protobuf definitions (latest tonic 0.14 / prost 0.14) and
 //! converts between our messages and raft-rs's `eraftpb::Message` types.
 //!
 //! # Architecture
@@ -76,11 +76,11 @@ impl From<tonic::Status> for TransportError {
 
 /// Convert our proto `RaftMessage` to raft-rs's `eraftpb::Message`
 ///
-/// This bridges the gap between our latest prost 0.13 types and raft-rs's prost 0.11 types.
+/// This bridges the gap between our latest prost 0.14 types and raft-rs's prost 0.11 types.
 pub fn to_eraftpb(msg: proto::RaftMessage) -> Result<eraftpb::Message, TransportError> {
-    // Serialize our message using prost 0.13
+    // Serialize our message using prost 0.14
     let bytes = {
-        use prost::Message as ProstMessage13;
+        use prost::Message as ProstMessage14;
         msg.encode_to_vec()
     };
 
@@ -93,7 +93,7 @@ pub fn to_eraftpb(msg: proto::RaftMessage) -> Result<eraftpb::Message, Transport
 
 /// Convert raft-rs's `eraftpb::Message` to our proto `RaftMessage`
 ///
-/// This bridges the gap between raft-rs's prost 0.11 types and our latest prost 0.13 types.
+/// This bridges the gap between raft-rs's prost 0.11 types and our latest prost 0.14 types.
 pub fn from_eraftpb(msg: eraftpb::Message) -> Result<proto::RaftMessage, TransportError> {
     // Serialize raft-rs message using prost 0.11
     let bytes = {
@@ -101,9 +101,9 @@ pub fn from_eraftpb(msg: eraftpb::Message) -> Result<proto::RaftMessage, Transpo
         msg.encode_to_vec()
     };
 
-    // Deserialize into our message using prost 0.13
+    // Deserialize into our message using prost 0.14
     {
-        use prost::Message as ProstMessage13;
+        use prost::Message as ProstMessage14;
         proto::RaftMessage::decode(&bytes[..])
             .map_err(|e| TransportError::Conversion(e.to_string()))
     }
