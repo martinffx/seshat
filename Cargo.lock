@@ -1279,6 +1279,7 @@ version = "0.1.0"
 dependencies = [
  "bincode",
  "bytes",
+ "log",
  "prost 0.11.9",
  "prost 0.14.1",
  "raft",

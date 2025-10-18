@@ -314,7 +314,9 @@ impl RaftNode {
     /// ```
     pub fn is_leader(&self) -> bool {
         // Access the internal Raft state through the RawNode
-        // The state_role() method returns the current role (Leader, Follower, Candidate)
+        // Direct field access is required because raft-rs doesn't provide a public
+        // state_role() accessor method. This is safe as the `raft` field is public
+        // and `state` is a stable API field used for checking leadership status.
         self.raw_node.raft.state == raft::StateRole::Leader
     }
 
@@ -444,10 +446,16 @@ impl RaftNode {
             // This should never happen with correct raft-rs usage, but we check anyway
             let last_applied = self.state_machine.last_applied();
             if entry.index <= last_applied {
-                eprintln!(
-                    "WARNING: Skipping already applied entry {} (last_applied: {}). \
-                     This indicates a bug in entry delivery or state machine consistency.",
-                    entry.index, last_applied
+                // TODO: Replace with structured logging (slog/tracing) once logger is added to RaftNode
+                // This is a critical invariant violation that should be logged properly
+                log::warn!(
+                    "Skipping already applied entry {} (last_applied: {}). \
+                     This indicates a bug in entry delivery or state machine consistency. \
+                     Node ID: {}, Entry term: {}",
+                    entry.index,
+                    last_applied,
+                    self.id,
+                    entry.term
                 );
                 continue;
             }

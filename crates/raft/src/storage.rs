@@ -4,6 +4,16 @@
 //! testing and development. For production use, a persistent storage backend
 //! (e.g., RocksDB) should be used instead.
 //!
+//! # Protobuf Version Bridging
+//!
+//! This module uses `prost_old` (prost 0.11) to maintain compatibility with `raft-rs`,
+//! which depends on prost 0.11. Our transport layer uses the latest prost 0.14 for
+//! gRPC communication with tonic 0.14. The bridging happens in the transport layer
+//! via binary serialization/deserialization.
+//!
+//! - `prost_old` (0.11): Used here for raft-rs `eraftpb` types (Entry, HardState, etc.)
+//! - `prost` (0.14): Used in transport layer for gRPC wire protocol
+//!
 //! # Thread Safety
 //!
 //! All fields are wrapped in `RwLock` to provide thread-safe concurrent access.
@@ -52,7 +62,6 @@ use std::sync::RwLock;
 /// // Storage is ready to use with default values
 /// ```
 #[derive(Debug)]
-#[allow(dead_code)] // Fields will be used when Storage trait is implemented
 pub struct MemStorage {
     /// Persistent state that must survive crashes.
     ///
