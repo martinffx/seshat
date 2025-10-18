@@ -2,9 +2,8 @@
 # https://mise.jdx.dev/
 
 [tools]
-# Runtime versions
 rust = "1.90"
-# Note: RocksDB and protoc are installed via cargo/system packages
+protoc = "28"
 
 [env]
 # Environment variables
@@ -16,8 +15,6 @@ description = "Install dependencies and tools"
 run = [
     "rustup component add rustfmt clippy",
     "cargo fetch",
-    # Check for protoc
-    "command -v protoc || echo '⚠️  Warning: protoc not found. Install with: brew install protobuf (macOS) or apt-get install protobuf-compiler (Linux)'",
 ]
 
 [tasks.build]
