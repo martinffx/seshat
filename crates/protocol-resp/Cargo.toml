@@ -1,0 +1,19 @@
+[package]
+name = "seshat-protocol-resp"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+description.workspace = true
+keywords.workspace = true
+
+[dependencies]
+bytes = "1.5"
+thiserror = "1.0"
+tokio-util = { version = "0.7", features = ["codec"] }
+
+[dev-dependencies]
+proptest = "1.0"
+tokio = { version = "1", features = ["full", "test-util"] }
+futures = "0.3"

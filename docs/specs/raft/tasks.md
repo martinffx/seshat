@@ -74,7 +74,7 @@ Distributed consensus implementation using raft-rs with in-memory storage for Ph
   - **Test**: Message serialization/deserialization roundtrips
   - **Implement**: Create raft.proto with RequestVote, AppendEntries, InstallSnapshot messages
   - **Refactor**: Organize messages and add comprehensive comments
-  - **Files**: `crates/protocol/proto/raft.proto`, `crates/protocol/build.rs`, `crates/protocol/src/lib.rs`, `crates/protocol/Cargo.toml`
+  - **Files**: `crates/protocol-resp/proto/raft.proto`, `crates/protocol-resp/build.rs`, `crates/protocol-resp/src/lib.rs`, `crates/protocol-resp/Cargo.toml`
   - **Deps**: common (path), tonic="0.11", prost="0.12", serde={version="1.0", features=["derive"]}
   - **Build Deps**: tonic-build="0.11"
   - **Acceptance**: raft.proto defines RaftService with RequestVote, AppendEntries, InstallSnapshot RPCs; LogEntry and EntryType enum; build.rs compiles .proto; cargo build succeeds; roundtrip tests pass
@@ -83,7 +83,7 @@ Distributed consensus implementation using raft-rs with in-memory storage for Ph
   - **Test**: Operation::apply() and serialization
   - **Implement**: Define Operation enum with Set and Del variants
   - **Refactor**: Extract apply logic into trait methods
-  - **Files**: `crates/protocol/src/operations.rs`, `crates/protocol/src/lib.rs`, `crates/protocol/Cargo.toml`
+  - **Files**: `crates/protocol-resp/src/operations.rs`, `crates/protocol-resp/src/lib.rs`, `crates/protocol-resp/Cargo.toml`
   - **Deps**: bincode="1.3"
   - **Acceptance**: Operation::Set{key, value} and Operation::Del{key}; Operation::apply(&self, data: &mut HashMap); Operation::serialize() and ::deserialize() using bincode; Set returns b"OK", Del returns b"1" or b"0"
 
