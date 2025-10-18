@@ -138,7 +138,7 @@ RespCommand::Set → KvService::handle_set() → RaftNode::propose() → RespVal
 - Handle protocol errors and edge cases
 - Command parser (GET, SET, DEL, EXISTS, PING)
 
-**Key Types**:
+**Future Key Types**:
 - `RespCodec`: Tokio codec for RESP framing
 - `RespCommand`: Parsed command enum
 - `RespValue`: RESP data types (SimpleString, BulkString, Array, etc.)
@@ -213,7 +213,7 @@ RespCommand::Set → KvService::handle_set() → RaftNode::propose() → RespVal
 - `AppendEntriesRequest`/`AppendEntriesResponse`
 - `InstallSnapshotRequest`/`InstallSnapshotResponse`
 
-**Raft Groups**:
+**Raft Groups** (Future):
 - **System Raft Group**: Cluster metadata (one instance, all nodes participate)
 - **Data Raft Groups**: Key-value data (multiple instances, one per shard in Phase 2+)
 
@@ -324,7 +324,7 @@ RespCommand::Set → KvService::handle_set() → RaftNode::propose() → RespVal
 
 ## Module Interaction Patterns
 
-### Client Request Flow (GET command)
+### Client Request Flow (GET command) - Future
 
 ```
 1. Client sends: GET foo
@@ -340,7 +340,7 @@ RespCommand::Set → KvService::handle_set() → RaftNode::propose() → RespVal
 11. Send back to client
 ```
 
-### Client Write Flow (SET command)
+### Client Write Flow (SET command) - Future
 
 ```
 1. Client sends: SET foo bar
@@ -358,7 +358,7 @@ RespCommand::Set → KvService::handle_set() → RaftNode::propose() → RespVal
 13. Response "+OK\r\n" returned to client
 ```
 
-### Raft Heartbeat Flow
+### Raft Message Flow (Heartbeats/Replication)
 
 ```
 1. raft::RaftNode (leader) ticks every 100ms

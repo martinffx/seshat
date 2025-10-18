@@ -5,7 +5,7 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-description.workspace = true
+description = "RESP2 protocol implementation for Seshat"
 keywords.workspace = true
 
 [dependencies]
