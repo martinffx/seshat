@@ -1,0 +1,502 @@
+{
+  "feature": "kvservice",
+  "description": "KV service layer that maps RESP protocol commands to Raft consensus operations",
+  "requirements": {
+    "overview": "The KV service layer receives parsed RESP commands from the protocol layer and translates them into Raft proposals or local reads. It implements Redis command semantics, validates inputs, and handles leader redirection.",
+    "functional_requirements": [
+      "Handle GET command - read from leader's state machine",
+      "Handle SET command - propose write operation via Raft",
+      "Handle DEL command - propose delete operation via Raft",
+      "Handle EXISTS command - check key existence on leader",
+      "Handle PING command - health check without Raft",
+      "Validate key size <= 256 bytes",
+      "Validate value size <= 64KB",
+      "Return MOVED error when not leader",
+      "Return NOQUORUM error when quorum not reachable"
+    ],
+    "non_functional_requirements": [
+      "GET latency < 5ms p99 (leader reads)",
+      "SET latency < 10ms p99 (includes Raft replication)",
+      "Handle 10,000 concurrent client connections",
+      "Strong consistency through Raft consensus",
+      "No data loss on leader failure"
+    ],
+    "dependencies": {
+      "protocol-resp": "Complete - provides RespCommand and RespValue types",
+      "raft": "In progress - provides RaftNode wrapper with propose() and read_local()",
+      "storage": "Not started - Raft uses this for persistence",
+      "common": "Provides shared error types and utilities"
+    }
+  },
+  "technical_needs": {
+    "domain_model": {
+      "entities": {
+        "KvService": "Main service struct that owns Arc<RaftNode>, handles RESP commands and routes to appropriate handlers",
+        "Operation": "Enum (Set, Del) that represents state machine operations, serialized with bincode for Raft proposals",
+        "StateMachine": "Applies committed operations to HashMap<Vec<u8>, Vec<u8>>, owned by RaftNode",
+        "RaftNode": "Consensus wrapper providing propose(op), read_local(key), is_leader(), get_leader_id()"
+      },
+      "services": {
+        "KvService::handle_command": "Routes RespCommand enum to appropriate handler method",
+        "handlers": [
+          "handle_get(key) -> RespValue - Reads from leader's state machine via RaftNode::read_local()",
+          "handle_set(key, value) -> RespValue - Validates sizes, creates Operation::Set, calls RaftNode::propose()",
+          "handle_del(keys) -> RespValue - Creates Operation::Del, calls RaftNode::propose() for each key",
+          "handle_exists(keys) -> RespValue - Reads from state machine, returns count of existing keys",
+          "handle_ping(message) -> RespValue - Returns message without accessing Raft"
+        ],
+        "validation": "Validates key size (max 256 bytes) and value size (max 64KB) before Raft proposal to prevent resource exhaustion"
+      },
+      "error_handling": {
+        "NotLeader": "Return RespValue::Error with MOVED <leader_id> when follower receives write",
+        "NoQuorum": "Return RespValue::Error with NOQUORUM when Raft cannot reach majority",
+        "KeyTooLarge": "Return RespValue::Error 'ERR key too large' when key > 256 bytes",
+        "ValueTooLarge": "Return RespValue::Error 'ERR value too large' when value > 64KB"
+      }
+    },
+    "persistence": {
+      "mechanism": "Raft consensus with RocksDB backend (indirect - KV service doesn't access storage directly)",
+      "storage_crate": "storage crate provides 6 column families, accessed only by Raft layer",
+      "state_machine": "In-memory HashMap<Vec<u8>, Vec<u8>> for fast reads, Raft applies committed operations",
+      "access_pattern": "Writes via RaftNode::propose() -> Raft log -> majority quorum -> StateMachine::apply(). Reads via RaftNode::read_local() from leader's in-memory HashMap",
+      "durability": "All writes must be committed by Raft majority (2 of 3 nodes) before returning success to client"
+    },
+    "api_specification": {
+      "type": "Internal Rust API (not HTTP REST)",
+      "interface": "KvService trait with async methods",
+      "protocol": "Receives RespCommand from protocol-resp crate, returns RespValue",
+      "routing": "seshat binary on port 6379 -> RespCodec -> KvService::handle_command() -> Raft layer",
+      "commands": {
+        "GET": "async fn handle_get(&self, key: Vec<u8>) -> Result<RespValue>",
+        "SET": "async fn handle_set(&self, key: Vec<u8>, value: Vec<u8>) -> Result<RespValue>",
+        "DEL": "async fn handle_del(&self, keys: Vec<Vec<u8>>) -> Result<RespValue>",
+        "EXISTS": "async fn handle_exists(&self, keys: Vec<Vec<u8>>) -> Result<RespValue>",
+        "PING": "async fn handle_ping(&self, message: Option<Vec<u8>>) -> Result<RespValue>"
+      }
+    },
+    "component_architecture": {
+      "layers": "Protocol (RESP) -> Service (KV) -> Consensus (Raft) -> Storage (RocksDB)",
+      "data_flow": {
+        "read_path": "Client -> RespCodec -> KvService::handle_get -> RaftNode::read_local -> StateMachine::get -> RespValue",
+        "write_path": "Client -> RespCodec -> KvService::handle_set -> RaftNode::propose -> Raft replication (2/3 quorum) -> StateMachine::apply -> RespValue::Ok"
+      },
+      "components": {
+        "KvService": "Owns Arc<RaftNode>, validates inputs, routes commands, formats responses",
+        "RaftNode": "Raft consensus wrapper in raft crate, handles leader election and replication",
+        "StateMachine": "Part of raft crate, applies Operation::Set and Operation::Del to HashMap",
+        "Operation": "State machine command enum in kv crate, serialized with bincode"
+      },
+      "threading": "Async Tokio runtime, KvService methods are async, RaftNode uses channels for thread-safe communication"
+    },
+    "events": {
+      "raft_log_entries": "Each SET/DEL becomes bincode-serialized Operation in Raft log entry, replicated to followers",
+      "state_machine_apply": "When Raft commits entry, StateMachine::apply(Operation) modifies HashMap atomically",
+      "leadership_changes": "On leader election, new leader can serve reads immediately, followers return MOVED error",
+      "client_notifications": "No pub/sub in Phase 1 - clients poll or use blocking operations"
+    },
+    "dependencies": {
+      "internal_crates": [
+        "protocol-resp (complete) - RespCommand, RespValue types",
+        "raft (in progress) - RaftNode, StateMachine, Storage trait",
+        "storage (planned) - RocksDB backend for Raft persistence",
+        "common - Error types, NodeId, configuration structs"
+      ],
+      "external_crates": [
+        "tokio 1.x - Async runtime for all I/O operations",
+        "bytes - Zero-copy byte buffer handling for key/value data",
+        "bincode - Serialize Operation enum for Raft proposals",
+        "thiserror - Error type definitions for KvService"
+      ],
+      "dependency_order": "protocol-resp (complete) -> raft (in progress) -> kv (this feature) -> seshat binary integration",
+      "blockers": "Requires RaftNode::propose() and RaftNode::read_local() from raft crate to be implemented"
+    },
+    "testing_strategy": {
+      "unit_tests": "Test each handler in isolation with mock RaftNode (verify validation, error handling)",
+      "integration_tests": "Test KvService with real RaftNode in single-node mode (no network)",
+      "property_tests": "Use proptest for key/value size validation edge cases",
+      "end_to_end_tests": "Full 3-node cluster tests in seshat binary (handled by chaos-testing feature)",
+      "test_scenarios": [
+        "SET on leader succeeds after quorum commit",
+        "GET on leader returns latest committed value",
+        "SET on follower returns MOVED error with leader ID",
+        "Key size exactly 256 bytes is accepted",
+        "Key size 257 bytes returns error",
+        "Value size exactly 64KB is accepted",
+        "Value size 64KB + 1 returns error",
+        "DEL of non-existent key returns 0",
+        "EXISTS on missing keys returns 0",
+        "PING with custom message echoes back"
+      ]
+    },
+    "resource_limits": {
+      "max_key_size_bytes": 256,
+      "max_value_size_bytes": 65536,
+      "max_concurrent_connections": 10000,
+      "request_timeout_secs": 30,
+      "raft_rpc_timeout_secs": 5,
+      "enforcement": "KvService validates sizes before calling Raft to prevent resource exhaustion"
+    }
+  },
+  "design": {
+    "architecture_overview": {
+      "pattern": "Distributed systems service layer with Raft consensus integration",
+      "description": "KvService is NOT a traditional Router -> Service -> Repository pattern. It's a distributed systems component that integrates with Raft consensus for strong consistency guarantees.",
+      "core_principle": "All state changes go through Raft consensus. KvService never directly accesses storage - it always routes through RaftNode.",
+      "data_flow": {
+        "write_operations": "KvService validates -> serializes Operation -> RaftNode::propose() -> Raft log replication -> majority commit -> StateMachine::apply() -> return success",
+        "read_operations": "KvService checks leadership -> RaftNode::get() -> StateMachine HashMap -> return value",
+        "leadership_routing": "Followers redirect writes to leader via MOVED error. Leaders serve both reads and writes."
+      }
+    },
+    "domain_model": {
+      "kvservice_struct": {
+        "definition": "pub struct KvService { raft_node: Arc<RaftNode> }",
+        "ownership": "Owns Arc<RaftNode> for thread-safe access across async tasks",
+        "responsibility": "Command routing, input validation, RESP response formatting",
+        "no_state": "KvService is stateless - all state lives in RaftNode's StateMachine",
+        "thread_safety": "Clone-able via Arc, safe to use across tokio tasks"
+      },
+      "operation_enum": {
+        "location": "Already implemented in crates/kv/src/operations.rs",
+        "variants": [
+          "Set { key: Vec<u8>, value: Vec<u8> } - Insert or update key-value pair",
+          "Del { key: Vec<u8> } - Delete key from state machine"
+        ],
+        "serialization": "Implements Serialize/Deserialize using bincode for Raft log entries",
+        "apply_method": "apply(&self, state: &mut HashMap<Vec<u8>, Vec<u8>>) -> OperationResult<Vec<u8>>",
+        "idempotency": "SET is idempotent (last write wins). DEL is idempotent (returns 0 if key doesn't exist)."
+      },
+      "state_machine": {
+        "location": "Implemented in crates/raft/src/state_machine.rs",
+        "storage": "In-memory HashMap<Vec<u8>, Vec<u8>> for fast reads",
+        "apply_logic": "Deserializes Operation from bytes, calls Operation::apply(), updates last_applied index",
+        "last_applied": "Tracks highest log index applied to prevent duplicate application",
+        "persistence": "State machine is rebuilt from Raft log on restart (or from snapshot in Phase 1+)"
+      },
+      "raft_node": {
+        "location": "Implemented in crates/raft/src/node.rs",
+        "key_methods": [
+          "propose(data: Vec<u8>) -> Result<()> - Submit write to Raft (only works on leader)",
+          "get(key: &[u8]) -> Option<Vec<u8>> - Read from state machine",
+          "is_leader() -> bool - Check if this node is leader",
+          "leader_id() -> Option<u64> - Get current leader ID for redirection"
+        ],
+        "consensus": "Wraps raft-rs RawNode, handles leader election, log replication, commit tracking",
+        "gRPC": "Integrated gRPC transport for AppendEntries, RequestVote, InstallSnapshot messages"
+      }
+    },
+    "api_specification": {
+      "type": "Internal Rust async API (not HTTP REST or gRPC)",
+      "interface": "KvService methods are async and return Result<RespValue, KvServiceError>",
+      "method_signatures": {
+        "handle_get": {
+          "signature": "async fn handle_get(&self, key: Vec<u8>) -> Result<RespValue, KvServiceError>",
+          "behavior": "1. Check if leader via raft_node.is_leader() (optional for reads). 2. Call raft_node.get(key). 3. Return RespValue::BulkString(value) or RespValue::Null",
+          "errors": "No Raft proposal errors - reads are local",
+          "latency_target": "< 5ms p99 (in-memory HashMap lookup)"
+        },
+        "handle_set": {
+          "signature": "async fn handle_set(&self, key: Vec<u8>, value: Vec<u8>) -> Result<RespValue, KvServiceError>",
+          "behavior": "1. Validate key size <= 256 bytes. 2. Validate value size <= 64KB. 3. Create Operation::Set. 4. Serialize with bincode. 5. Call raft_node.propose(). 6. Wait for commit (via ready loop). 7. Return RespValue::Ok",
+          "errors": "KeyTooLarge, ValueTooLarge, NotLeader, NoQuorum, ProposalFailed",
+          "latency_target": "< 10ms p99 (includes Raft replication to 2/3 nodes)"
+        },
+        "handle_del": {
+          "signature": "async fn handle_del(&self, keys: Vec<Vec<u8>>) -> Result<RespValue, KvServiceError>",
+          "behavior": "1. Validate each key size <= 256 bytes. 2. For each key, create Operation::Del and propose. 3. Track success count. 4. Return RespValue::Integer(deleted_count)",
+          "errors": "KeyTooLarge, NotLeader, NoQuorum",
+          "redis_semantics": "DEL accepts multiple keys, returns count of deleted keys (0 if none existed)"
+        },
+        "handle_exists": {
+          "signature": "async fn handle_exists(&self, keys: Vec<Vec<u8>>) -> Result<RespValue, KvServiceError>",
+          "behavior": "1. For each key, call raft_node.get(key). 2. Count how many exist. 3. Return RespValue::Integer(exists_count)",
+          "errors": "None (reads are always safe)",
+          "redis_semantics": "EXISTS accepts multiple keys, returns count of existing keys"
+        },
+        "handle_ping": {
+          "signature": "async fn handle_ping(&self, message: Option<Vec<u8>>) -> Result<RespValue, KvServiceError>",
+          "behavior": "1. If message is Some(msg), return RespValue::BulkString(msg). 2. If None, return RespValue::SimpleString(\"PONG\")",
+          "errors": "None (no Raft interaction)",
+          "redis_semantics": "PING without args returns PONG. PING <message> echoes message."
+        }
+      }
+    },
+    "component_structure": {
+      "kvservice_module": {
+        "file": "crates/kv/src/service.rs (new file to create)",
+        "exports": "pub struct KvService, pub enum KvServiceError",
+        "dependencies": [
+          "use crate::Operation - from operations.rs",
+          "use seshat_raft::RaftNode - from raft crate",
+          "use seshat_protocol_resp::{RespCommand, RespValue} - from protocol-resp crate",
+          "use std::sync::Arc - for thread-safe RaftNode sharing",
+          "use thiserror::Error - for error type definitions"
+        ]
+      },
+      "error_types": {
+        "definition": "pub enum KvServiceError",
+        "variants": [
+          "KeyTooLarge { size: usize } - Key exceeds 256 bytes",
+          "ValueTooLarge { size: usize } - Value exceeds 64KB",
+          "NotLeader { leader_id: Option<u64> } - Write on follower, redirect to leader",
+          "NoQuorum - Cannot reach Raft majority",
+          "ProposalFailed(String) - Raft proposal rejected",
+          "SerializationError(bincode::Error) - Operation serialization failed",
+          "RaftError(Box<dyn std::error::Error>) - Internal Raft error"
+        ],
+        "to_resp_value": "impl method to convert KvServiceError to RespValue::Error for client responses"
+      },
+      "validation_logic": {
+        "max_key_size": "const MAX_KEY_SIZE: usize = 256; // bytes",
+        "max_value_size": "const MAX_VALUE_SIZE: usize = 65536; // 64 KB",
+        "enforcement": "validate_key_size() and validate_value_size() helper methods",
+        "early_validation": "Validate BEFORE creating Operation and proposing to Raft to prevent resource exhaustion"
+      }
+    },
+    "data_flow_diagrams": {
+      "write_path_set": {
+        "step_1": "TCP Client sends: SET foo bar",
+        "step_2": "seshat binary TcpListener receives on port 6379",
+        "step_3": "RespCodec parses into RespCommand::Set{key: \"foo\", value: \"bar\"}",
+        "step_4": "seshat binary routes to KvService::handle_set(b\"foo\", b\"bar\")",
+        "step_5": "KvService validates key (3 bytes) <= 256 bytes ✓",
+        "step_6": "KvService validates value (3 bytes) <= 64KB ✓",
+        "step_7": "KvService creates Operation::Set { key: b\"foo\", value: b\"bar\" }",
+        "step_8": "KvService serializes Operation with bincode",
+        "step_9": "KvService calls raft_node.propose(serialized_op)",
+        "step_10": "RaftNode checks is_leader(). If follower, return NotLeader error -> KvService returns MOVED <leader_id>",
+        "step_11": "RaftNode (leader) appends entry to local Raft log",
+        "step_12": "RaftNode sends AppendEntries RPC via gRPC to followers (node 2, node 3)",
+        "step_13": "Followers append entry to their logs and respond with success",
+        "step_14": "Once majority (2/3) respond, RaftNode commits the entry",
+        "step_15": "RaftNode calls StateMachine::apply(index, serialized_op)",
+        "step_16": "StateMachine deserializes Operation::Set",
+        "step_17": "StateMachine calls op.apply(&mut hashmap) -> inserts (\"foo\", \"bar\")",
+        "step_18": "RaftNode signals commit success to waiting propose() call",
+        "step_19": "KvService receives success, returns RespValue::Ok",
+        "step_20": "RespCodec encodes \"+OK\\r\\n\" and sends to client"
+      },
+      "read_path_get": {
+        "step_1": "TCP Client sends: GET foo",
+        "step_2": "seshat binary TcpListener receives on port 6379",
+        "step_3": "RespCodec parses into RespCommand::Get{key: \"foo\"}",
+        "step_4": "seshat binary routes to KvService::handle_get(b\"foo\")",
+        "step_5": "KvService calls raft_node.get(b\"foo\")",
+        "step_6": "RaftNode reads from StateMachine HashMap (in-memory, no Raft consensus needed)",
+        "step_7": "StateMachine returns Some(b\"bar\") if key exists, None otherwise",
+        "step_8": "KvService converts to RespValue::BulkString(b\"bar\") or RespValue::Null",
+        "step_9": "RespCodec encodes \"$3\\r\\nbar\\r\\n\" or \"$-1\\r\\n\" and sends to client",
+        "note": "Reads are served from leader's in-memory state machine WITHOUT Raft consensus in Phase 1. Phase 4 adds linearizable reads with ReadIndex."
+      },
+      "follower_write_redirect": {
+        "step_1": "Client sends SET to follower node",
+        "step_2": "KvService::handle_set validates and creates Operation",
+        "step_3": "Calls raft_node.propose()",
+        "step_4": "RaftNode checks is_leader() -> false",
+        "step_5": "RaftNode returns NotLeader error",
+        "step_6": "KvService calls raft_node.leader_id() -> Some(1)",
+        "step_7": "KvService returns KvServiceError::NotLeader { leader_id: Some(1) }",
+        "step_8": "Error converted to RespValue::Error(\"-MOVED 1\\r\\n\")",
+        "step_9": "Client receives error, reconnects to leader node 1, retries SET"
+      }
+    },
+    "error_handling_strategy": {
+      "validation_errors": {
+        "key_too_large": "Return RespValue::Error(\"ERR key too large (max 256 bytes)\") immediately, no Raft interaction",
+        "value_too_large": "Return RespValue::Error(\"ERR value too large (max 64KB)\") immediately, no Raft interaction",
+        "when": "Before creating Operation, before calling raft_node.propose()"
+      },
+      "leadership_errors": {
+        "not_leader_with_known_leader": "Return RespValue::Error(\"-MOVED <leader_id>\\r\\n\") so client can redirect",
+        "not_leader_no_leader": "Return RespValue::Error(\"-NOLEADER election in progress\\r\\n\") so client can retry",
+        "when": "On propose() failure when this node is follower or candidate"
+      },
+      "quorum_errors": {
+        "no_quorum": "Return RespValue::Error(\"-NOQUORUM cannot reach majority\\r\\n\") when Raft cannot commit",
+        "timeout": "If commit doesn't happen within request_timeout_secs (30s), return timeout error",
+        "when": "When Raft majority is unreachable (network partition, node failures)"
+      },
+      "serialization_errors": {
+        "bincode_error": "Return RespValue::Error(\"ERR internal serialization error\") - should never happen with valid Operation",
+        "when": "Operation::serialize() fails (defensive coding)"
+      },
+      "raft_internal_errors": {
+        "handling": "Log error with tracing::error!, return RespValue::Error(\"ERR internal Raft error\")",
+        "examples": "Storage corruption, invalid log entries, state machine inconsistencies",
+        "recovery": "Node should crash and restart (fail-fast principle) on invariant violations"
+      }
+    },
+    "concurrency_model": {
+      "async_runtime": "Tokio 1.x for all I/O operations",
+      "kvservice_cloning": "KvService wraps Arc<RaftNode>, is Clone-able, safe to share across tokio tasks",
+      "raft_node_sharing": "Arc<RaftNode> provides thread-safe access to Raft state",
+      "state_machine_locking": "StateMachine uses internal RwLock for concurrent reads, exclusive writes on apply",
+      "propose_concurrency": "Multiple concurrent propose() calls are safe - Raft serializes them into log order",
+      "read_concurrency": "Reads are concurrent-safe via RwLock read locks on StateMachine HashMap",
+      "no_blocking": "All KvService methods are async, never block tokio runtime",
+      "channel_communication": "RaftNode uses tokio::sync::mpsc channels for internal message passing"
+    },
+    "testing_strategy_detailed": {
+      "unit_tests": {
+        "file": "crates/kv/src/service.rs (in #[cfg(test)] mod tests)",
+        "approach": "Mock RaftNode using trait-based dependency injection or test doubles",
+        "test_cases": [
+          "test_handle_get_returns_value_when_key_exists",
+          "test_handle_get_returns_null_when_key_missing",
+          "test_handle_set_validates_key_size",
+          "test_handle_set_validates_value_size",
+          "test_handle_set_key_exactly_256_bytes_accepted",
+          "test_handle_set_key_257_bytes_rejected",
+          "test_handle_set_value_exactly_64kb_accepted",
+          "test_handle_set_value_64kb_plus_1_rejected",
+          "test_handle_del_single_key",
+          "test_handle_del_multiple_keys",
+          "test_handle_del_nonexistent_key_returns_zero",
+          "test_handle_exists_multiple_keys",
+          "test_handle_exists_no_keys_exist_returns_zero",
+          "test_handle_ping_no_message_returns_pong",
+          "test_handle_ping_with_message_echoes_back",
+          "test_not_leader_error_includes_leader_id",
+          "test_serialization_error_handling"
+        ]
+      },
+      "integration_tests": {
+        "file": "crates/kv/tests/integration_test.rs (new file)",
+        "approach": "Use real RaftNode in single-node cluster mode (no network)",
+        "test_cases": [
+          "test_set_then_get_returns_value",
+          "test_del_then_get_returns_null",
+          "test_set_overwrites_existing_value",
+          "test_exists_after_set_returns_one",
+          "test_exists_after_del_returns_zero",
+          "test_multiple_sets_in_sequence",
+          "test_concurrent_operations"
+        ],
+        "setup": "Create RaftNode with single peer, tick until leader, create KvService, test handlers"
+      },
+      "property_tests": {
+        "file": "crates/kv/tests/property_test.rs (new file)",
+        "approach": "Use proptest to generate random key/value sizes and binary data",
+        "test_cases": [
+          "prop_key_size_boundary_256_bytes (test around exact boundary)",
+          "prop_value_size_boundary_64kb (test around exact boundary)",
+          "prop_binary_data_roundtrip (arbitrary bytes in keys/values)",
+          "prop_empty_keys_and_values (edge cases)",
+          "prop_utf8_and_non_utf8_data (mixed encodings)"
+        ]
+      },
+      "end_to_end_tests": {
+        "location": "Handled by seshat binary integration tests and chaos-testing feature",
+        "scenarios": "Full 3-node cluster with real networking, partitions, failures",
+        "out_of_scope": "Not part of kv crate testing - tested at system level"
+      }
+    },
+    "performance_considerations": {
+      "read_latency": {
+        "target": "< 5ms p99 for GET on leader",
+        "optimization": "In-memory HashMap lookup (no disk I/O, no network)",
+        "bottleneck": "RwLock contention under high read concurrency",
+        "mitigation": "StateMachine uses RwLock to allow concurrent reads"
+      },
+      "write_latency": {
+        "target": "< 10ms p99 for SET with Raft replication",
+        "breakdown": "1ms validation + 2ms serialization + 5ms network round-trip + 2ms apply",
+        "bottleneck": "Network latency for AppendEntries RPC to followers",
+        "mitigation": "Batching multiple proposals into single Raft entry (Phase 2 optimization)"
+      },
+      "throughput": {
+        "target": "> 5,000 ops/sec per node",
+        "read_throughput": "Limited by CPU (HashMap lookups) and RwLock contention",
+        "write_throughput": "Limited by Raft consensus (can only commit as fast as majority responds)",
+        "scaling": "Phase 2 adds multi-shard parallelism for horizontal write scaling"
+      },
+      "memory_usage": {
+        "state_machine": "HashMap size = total key-value data size (unbounded)",
+        "raft_log": "Grows until snapshot (max ~100MB before compaction)",
+        "operation_overhead": "Each Operation has ~48 bytes overhead (enum tag + Vec allocations)",
+        "mitigation": "Phase 1 adds log compaction and snapshots to bound memory growth"
+      },
+      "zero_copy_opportunities": {
+        "bytes_crate": "Use bytes::Bytes for key/value data to avoid copies",
+        "limitation": "HashMap<Vec<u8>, Vec<u8>> currently requires owned data",
+        "future": "Phase 3 could use bytes::Bytes in StateMachine for zero-copy reads"
+      }
+    },
+    "phase_1_limitations": {
+      "no_follower_reads": "Only leader serves reads in Phase 1. Phase 4 adds follower reads with ReadIndex.",
+      "no_batching": "Each SET/DEL is separate Raft proposal. Phase 2 adds batching for throughput.",
+      "no_pipelining": "Client waits for each operation to commit. Phase 3 adds request pipelining.",
+      "no_ttl": "No expiration support. Phase 3 adds TTL for keys.",
+      "simple_data_types": "Only byte arrays. Phase 3 adds Redis data types (lists, sets, hashes).",
+      "linearizable_reads": "Reads may return stale data during leadership transitions. Phase 4 adds ReadIndex mechanism."
+    },
+    "implementation_dependencies": {
+      "requires": [
+        "RaftNode::propose() - DONE (implemented in node.rs)",
+        "RaftNode::get() - DONE (implemented in node.rs)",
+        "RaftNode::is_leader() - DONE (implemented in node.rs)",
+        "RaftNode::leader_id() - DONE (implemented in node.rs)",
+        "Operation::serialize() - DONE (implemented in operations.rs)",
+        "Operation::deserialize() - DONE (implemented in operations.rs)",
+        "RespCommand and RespValue - DONE (protocol-resp crate complete)"
+      ],
+      "blockers": [
+        "None - all required Raft functionality is implemented",
+        "Can begin KvService implementation immediately"
+      ],
+      "provides": [
+        "KvService struct for seshat binary integration",
+        "Complete Redis command handlers (GET, SET, DEL, EXISTS, PING)",
+        "Input validation and error handling layer",
+        "RESP protocol integration with Raft consensus"
+      ]
+    },
+    "observability": {
+      "structured_logging": {
+        "framework": "tracing crate with tracing::instrument on all handler methods",
+        "log_levels": [
+          "ERROR: Raft errors, serialization failures, invariant violations",
+          "WARN: Leadership transitions, quorum loss, validation rejections",
+          "INFO: Command handling, leader redirection",
+          "DEBUG: Key/value sizes, operation details",
+          "TRACE: Full serialized operation bytes, detailed Raft interactions"
+        ],
+        "context": "Include node_id, command_type, key_size, value_size in all logs"
+      },
+      "metrics": {
+        "phase_4": "OpenTelemetry metrics for production (not Phase 1)",
+        "key_metrics": [
+          "kv_commands_total{command, status} - Counter of all commands",
+          "kv_command_duration_seconds{command} - Histogram of latencies",
+          "kv_validation_errors_total{error_type} - Counter of validation failures",
+          "kv_raft_proposals_total{status} - Counter of Raft proposals (success/failure)",
+          "kv_not_leader_redirects_total - Counter of MOVED responses",
+          "kv_key_size_bytes - Histogram of key sizes",
+          "kv_value_size_bytes - Histogram of value sizes"
+        ]
+      }
+    }
+  },
+  "implementation_notes": {
+    "phase": "Phase 1 - MVP",
+    "status": "Partial - Operation enum exists, KvService handlers not yet implemented",
+    "next_steps": [
+      "Implement KvService struct with Arc<RaftNode> field",
+      "Implement handle_get with leader check and state machine read",
+      "Implement handle_set with size validation and Raft proposal",
+      "Implement handle_del with Raft proposal",
+      "Implement handle_exists with state machine reads",
+      "Implement handle_ping (trivial, no Raft interaction)",
+      "Add unit tests for each handler",
+      "Integration test with single-node Raft cluster"
+    ],
+    "future_enhancements": [
+      "Phase 2: Multi-shard routing (consistent hashing)",
+      "Phase 2: Cross-shard operations",
+      "Phase 3: TTL support (expiring keys)",
+      "Phase 3: Additional Redis data types (lists, sets, hashes)",
+      "Phase 4: Read-your-writes consistency for followers",
+      "Phase 4: Follower reads with linearizability checks"
+    ]
+  }
+}

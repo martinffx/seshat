@@ -1,0 +1,443 @@
+{
+  "migration_overview": {
+    "description": "Technical design for migrating from raft-rs to openraft in simplified scope",
+    "version": "1.0.0",
+    "created_at": "2025-10-26",
+    "goals": [
+      "Replace raft-rs with openraft to eliminate prost version conflict",
+      "Keep MemStorage in-memory without RocksDB dependencies",
+      "Stub network transport for future gRPC integration",
+      "No KV service layer integration in this migration",
+      "Maintain existing test coverage (85+ tests)"
+    ],
+    "constraints": [
+      "All storage remains in-memory using RwLock",
+      "Network transport is stubbed (no actual gRPC yet)",
+      "Maintain compatibility with existing StateMachine",
+      "Preserve idempotency checks and behavior"
+    ]
+  },
+
+  "type_system": {
+    "description": "OpenRaft type configuration and mapping from raft-rs",
+    "type_config": {
+      "file": "crates/raft/src/types.rs",
+      "implementation": {
+        "NodeId": "u64 (same as raft-rs node IDs)",
+        "Node": "BasicNode { addr: String } (simple node info)",
+        "Entry": "LogEntry<Request> (replaces eraftpb::Entry)",
+        "SnapshotData": "Vec<u8> (replaces eraftpb::Snapshot.data)",
+        "AsyncRuntime": "TokioRuntime (openraft built-in)"
+      },
+      "type_definition": "pub struct RaftTypeConfig;\n\nimpl openraft::RaftTypeConfig for RaftTypeConfig {\n    type NodeId = u64;\n    type Node = BasicNode;\n    type Entry = LogEntry<Request>;\n    type SnapshotData = Vec<u8>;\n    type AsyncRuntime = TokioRuntime;\n}"
+    },
+    "request_response_types": {
+      "Request": {
+        "description": "Wraps Operation for Raft proposals",
+        "fields": ["data: Vec<u8>"],
+        "serde": true
+      },
+      "Response": {
+        "description": "Result from state machine apply",
+        "fields": ["result: Vec<u8>"],
+        "serde": true
+      },
+      "BasicNode": {
+        "description": "Simple node metadata",
+        "fields": ["addr: String"],
+        "serde": true
+      }
+    },
+    "conversions": {
+      "eraftpb_to_openraft": {
+        "Entry": "LogEntry::new(log_id, Request { data: entry.data })",
+        "HardState": "Vote { term, node_id: vote }, commit: log_id",
+        "ConfState": "Membership::new(voters, learners)",
+        "Message": "Not needed - openraft handles internally"
+      },
+      "openraft_to_storage": {
+        "LogId": "{ term, index }",
+        "Vote": "{ term, node_id }",
+        "Membership": "{ voters: BTreeSet<u64>, learners: BTreeSet<u64> }"
+      }
+    }
+  },
+
+  "storage_layer": {
+    "description": "Mapping MemStorage to openraft storage traits",
+    "traits_to_implement": [
+      "RaftLogReader",
+      "RaftSnapshotBuilder",
+      "RaftStorage"
+    ],
+    "struct_definition": {
+      "name": "OpenRaftMemStorage",
+      "fields": {
+        "vote": "RwLock<Option<Vote<u64>>>",
+        "log": "RwLock<BTreeMap<u64, LogEntry<Request>>>",
+        "snapshot": "RwLock<Option<Snapshot<RaftTypeConfig>>>",
+        "state_machine": "RwLock<StateMachine>",
+        "membership": "RwLock<StoredMembership<u64, BasicNode>>"
+      }
+    },
+    "trait_implementations": {
+      "RaftLogReader": {
+        "methods": {
+          "get_log_state": "async fn() -> Result<LogState<RaftTypeConfig>>",
+          "try_get_log_entries": "async fn(range) -> Result<Vec<LogEntry<Request>>>",
+          "read_vote": "async fn() -> Result<Option<Vote<u64>>>"
+        },
+        "implementation_notes": "Read from RwLock fields, convert to openraft types"
+      },
+      "RaftSnapshotBuilder": {
+        "methods": {
+          "build_snapshot": "async fn() -> Result<Snapshot<RaftTypeConfig>>"
+        },
+        "implementation_notes": "Call StateMachine::snapshot(), wrap in openraft Snapshot"
+      },
+      "RaftStorage": {
+        "methods": {
+          "save_vote": "async fn(vote: &Vote<u64>) -> Result<()>",
+          "append": "async fn(entries: &[LogEntry<Request>]) -> Result<()>",
+          "delete_conflict_logs_since": "async fn(log_id: LogId<u64>) -> Result<()>",
+          "purge_logs_upto": "async fn(log_id: LogId<u64>) -> Result<()>",
+          "apply_to_state_machine": "async fn(entries: &[LogEntry<Request>]) -> Result<Vec<Response>>",
+          "begin_receiving_snapshot": "async fn() -> Result<Box<SnapshotStream>>",
+          "install_snapshot": "async fn(meta, snapshot: Box<SnapshotData>) -> Result<()>",
+          "get_current_snapshot": "async fn() -> Result<Option<Snapshot<RaftTypeConfig>>>",
+          "get_membership_config": "async fn() -> Result<MembershipConfig<u64>>"
+        },
+        "implementation_notes": "Bridge to existing MemStorage pattern, maintain idempotency"
+      }
+    },
+    "migration_mapping": {
+      "set_hard_state": "save_vote() + internal commit tracking",
+      "set_conf_state": "Update membership field",
+      "append_entries": "append() method",
+      "entries(low, high)": "try_get_log_entries()",
+      "term(idx)": "Extract from log entry at index",
+      "first_index/last_index": "Calculate from BTreeMap keys",
+      "snapshot()": "get_current_snapshot()"
+    }
+  },
+
+  "state_machine": {
+    "description": "Integrate existing StateMachine with openraft",
+    "trait": "openraft::RaftStateMachine",
+    "wrapper_struct": {
+      "name": "OpenRaftStateMachine",
+      "fields": ["inner: Arc<RwLock<StateMachine>>"]
+    },
+    "methods": {
+      "apply": {
+        "signature": "async fn(&mut self, entries: &[LogEntry<Request>]) -> Result<Vec<Response>>",
+        "implementation": "for entry in entries {\n    let data = &entry.payload.data;\n    let result = self.inner.write().unwrap().apply(entry.log_id.index, data)?;\n    responses.push(Response { result });\n}"
+      },
+      "snapshot": {
+        "signature": "async fn(&mut self) -> Result<Vec<u8>>",
+        "implementation": "self.inner.read().unwrap().snapshot()"
+      },
+      "restore": {
+        "signature": "async fn(&mut self, snapshot: &[u8]) -> Result<()>",
+        "implementation": "self.inner.write().unwrap().restore(snapshot)"
+      }
+    },
+    "idempotency": {
+      "description": "Preserve existing idempotency checks",
+      "mechanism": "StateMachine::apply() already checks index > last_applied",
+      "preserved_behavior": "Reject duplicate or out-of-order entries"
+    }
+  },
+
+  "raft_node_wrapper": {
+    "description": "Migrate RaftNode from RawNode to openraft::Raft",
+    "struct_changes": {
+      "old": "raw_node: RawNode<MemStorage>",
+      "new": "raft: Raft<RaftTypeConfig>",
+      "storage": "storage: Arc<OpenRaftMemStorage>",
+      "config": "config: Arc<Config>"
+    },
+    "method_migration": {
+      "new()": {
+        "changes": "Create openraft Config, build Raft instance",
+        "implementation": "let config = Config {\n    election_timeout_min: 150,\n    election_timeout_max: 300,\n    heartbeat_interval: 50,\n    ..Default::default()\n};\nlet raft = Raft::new(id, Arc::new(config), network, storage).await?;"
+      },
+      "tick()": {
+        "changes": "Remove - openraft handles timing internally",
+        "replacement": "Automatic via tokio runtime"
+      },
+      "propose()": {
+        "changes": "Use raft.client_write() instead",
+        "implementation": "let request = ClientWriteRequest::new(Request { data });\nself.raft.client_write(request).await?"
+      },
+      "handle_ready()": {
+        "changes": "Remove - openraft handles this internally",
+        "replacement": "Callbacks in RaftStorage trait"
+      },
+      "is_leader()": {
+        "changes": "Use raft.is_leader()",
+        "implementation": "self.raft.is_leader().await"
+      },
+      "leader_id()": {
+        "changes": "Use raft.current_leader()",
+        "implementation": "self.raft.current_leader().await"
+      },
+      "get()": {
+        "changes": "Direct access to storage.state_machine",
+        "implementation": "self.storage.state_machine.read().unwrap().get(key)"
+      }
+    },
+    "api_compatibility": {
+      "description": "Maintain backward compatibility where possible",
+      "breaking_changes": [
+        "Methods become async (tick, propose, is_leader, leader_id)",
+        "handle_ready() removed - logic moved to storage callbacks",
+        "Message handling moved to network layer"
+      ],
+      "preserved": [
+        "new() signature (add async)",
+        "get() remains synchronous",
+        "Same error types via conversion"
+      ]
+    }
+  },
+
+  "network_stub": {
+    "description": "Minimal RaftNetwork implementation for future gRPC",
+    "struct": {
+      "name": "StubNetwork",
+      "fields": ["node_id: u64"]
+    },
+    "trait_implementation": {
+      "send_append_entries": "async fn() -> Result<AppendEntriesResponse> { Ok(Default::default()) }",
+      "send_vote": "async fn() -> Result<VoteResponse> { Ok(Default::default()) }",
+      "send_install_snapshot": "async fn() -> Result<InstallSnapshotResponse> { Ok(Default::default()) }"
+    },
+    "future_integration": {
+      "description": "Replace stub with actual gRPC transport",
+      "location": "crates/raft/src/transport.rs",
+      "reuse": "Existing protobuf definitions and client pool"
+    }
+  },
+
+  "dependencies": {
+    "description": "Cargo.toml changes",
+    "remove": [
+      "raft = { version = \"0.7\", ... }",
+      "prost-old = { package = \"prost\", version = \"0.11\" }",
+      "slog = \"2\""
+    ],
+    "add": [
+      "openraft = { version = \"0.10\", features = [\"tokio\"] }",
+      "tracing = \"0.1\"",
+      "async-trait = \"0.1\""
+    ],
+    "keep": [
+      "tokio = { version = \"1\", features = [\"full\"] }",
+      "serde = { version = \"1\", features = [\"derive\"] }",
+      "bincode = \"1.3\"",
+      "tonic = \"0.14\"",
+      "prost = \"0.14\""
+    ],
+    "rationale": {
+      "openraft": "Modern async Raft with no prost conflicts",
+      "tracing": "Replace slog, openraft uses tracing",
+      "async-trait": "Required for openraft trait implementations"
+    }
+  },
+
+  "test_migration": {
+    "description": "Strategy for migrating 85+ tests",
+    "categories": {
+      "storage_tests": {
+        "count": "~50 tests",
+        "changes": "Update to use OpenRaftMemStorage API",
+        "example": "test_append_entries() -> async test using storage.append()"
+      },
+      "node_tests": {
+        "count": "~35 tests",
+        "changes": "Make async, remove tick/handle_ready tests",
+        "example": "test_propose() -> async test using raft.client_write()"
+      },
+      "state_machine_tests": {
+        "count": "~15 tests",
+        "changes": "Minimal - wrap in async runtime",
+        "example": "Keep existing apply() tests"
+      }
+    },
+    "test_utilities": {
+      "create_test_cluster": "async fn() -> (Raft, Raft, Raft)",
+      "wait_for_leader": "async fn(raft: &Raft) -> u64",
+      "propose_and_wait": "async fn(raft: &Raft, data: Vec<u8>) -> Response"
+    },
+    "removed_tests": [
+      "tick() tests - openraft handles internally",
+      "handle_ready() tests - no longer exists",
+      "Message processing - moved to network layer"
+    ],
+    "new_tests": [
+      "Async proposal handling",
+      "Automatic leader election",
+      "Membership changes via openraft API"
+    ]
+  },
+
+  "implementation_phases": {
+    "phase_1": {
+      "name": "Type System Setup",
+      "duration": "2-3 hours",
+      "files": [
+        "crates/raft/src/types.rs (new)",
+        "crates/raft/Cargo.toml"
+      ],
+      "tasks": [
+        "Define RaftTypeConfig struct",
+        "Create Request/Response types",
+        "Define BasicNode type",
+        "Add openraft dependencies",
+        "Remove raft-rs dependencies"
+      ],
+      "tests": "Compile check, type construction tests",
+      "risks": "None - foundational work"
+    },
+    "phase_2": {
+      "name": "Storage Layer Implementation",
+      "duration": "4-5 hours",
+      "files": [
+        "crates/storage/src/openraft_storage.rs (new)",
+        "crates/storage/src/lib.rs"
+      ],
+      "tasks": [
+        "Create OpenRaftMemStorage struct",
+        "Implement RaftLogReader trait",
+        "Implement RaftSnapshotBuilder trait",
+        "Implement RaftStorage trait",
+        "Map existing MemStorage logic"
+      ],
+      "tests": "Port ~50 storage tests to async",
+      "risks": "Complex trait mapping, ensure idempotency preserved"
+    },
+    "phase_3": {
+      "name": "State Machine Integration",
+      "duration": "2-3 hours",
+      "files": [
+        "crates/raft/src/state_machine_wrapper.rs (new)",
+        "crates/raft/src/state_machine.rs"
+      ],
+      "tasks": [
+        "Create OpenRaftStateMachine wrapper",
+        "Implement RaftStateMachine trait",
+        "Preserve idempotency checks",
+        "Connect to OpenRaftMemStorage"
+      ],
+      "tests": "Port ~15 state machine tests",
+      "risks": "Ensure apply() index checking works correctly"
+    },
+    "phase_4": {
+      "name": "Network Stub",
+      "duration": "1-2 hours",
+      "files": [
+        "crates/raft/src/network_stub.rs (new)"
+      ],
+      "tasks": [
+        "Create StubNetwork struct",
+        "Implement RaftNetwork trait with stubs",
+        "Add TODO comments for gRPC integration",
+        "Configure for single-node testing"
+      ],
+      "tests": "Basic network instantiation tests",
+      "risks": "None - just stubs"
+    },
+    "phase_5": {
+      "name": "RaftNode Migration",
+      "duration": "4-5 hours",
+      "files": [
+        "crates/raft/src/node.rs",
+        "crates/raft/src/lib.rs"
+      ],
+      "tasks": [
+        "Replace RawNode with openraft::Raft",
+        "Update new() to create Raft instance",
+        "Migrate propose() to client_write()",
+        "Update is_leader()/leader_id()",
+        "Remove tick() and handle_ready()"
+      ],
+      "tests": "Port ~35 node tests to async",
+      "risks": "API breaking changes, async migration complexity"
+    },
+    "phase_6": {
+      "name": "Integration and Cleanup",
+      "duration": "2-3 hours",
+      "files": [
+        "crates/raft/tests/integration.rs",
+        "crates/*/src/lib.rs"
+      ],
+      "tasks": [
+        "Fix compilation errors across crates",
+        "Update integration tests",
+        "Remove unused imports/code",
+        "Update documentation",
+        "Verify test coverage"
+      ],
+      "tests": "Full test suite run",
+      "risks": "Hidden dependencies on raft-rs behavior"
+    }
+  },
+
+  "risk_mitigation": {
+    "async_complexity": {
+      "risk": "Converting sync code to async increases complexity",
+      "mitigation": "Use tokio::runtime::Handle for sync contexts, block_on sparingly"
+    },
+    "api_compatibility": {
+      "risk": "Breaking changes affect dependent crates",
+      "mitigation": "Create compatibility layer for critical APIs during transition"
+    },
+    "test_coverage": {
+      "risk": "Lost test coverage during migration",
+      "mitigation": "Track test count per phase, ensure 85+ tests remain"
+    },
+    "idempotency": {
+      "risk": "Loss of idempotency checks in state machine",
+      "mitigation": "Keep existing StateMachine::apply() logic unchanged"
+    },
+    "performance": {
+      "risk": "Async overhead impacts performance",
+      "mitigation": "Profile critical paths, optimize after migration complete"
+    }
+  },
+
+  "validation_criteria": {
+    "functional": [
+      "Single-node cluster starts successfully",
+      "Proposals are accepted and applied",
+      "State machine maintains consistency",
+      "Get operations return correct values",
+      "85+ tests pass"
+    ],
+    "technical": [
+      "No prost version conflicts",
+      "Clean compilation with no warnings",
+      "All crates compile together",
+      "No runtime panics in tests"
+    ],
+    "migration": [
+      "MemStorage remains in-memory only",
+      "No RocksDB dependencies added",
+      "StateMachine idempotency preserved",
+      "Network transport properly stubbed"
+    ]
+  },
+
+  "future_work": {
+    "description": "Post-migration enhancements",
+    "items": [
+      "Implement actual gRPC transport using existing proto files",
+      "Add RocksDB storage backend",
+      "Integrate with KV service layer",
+      "Add cluster membership management",
+      "Implement log compaction and snapshots",
+      "Add metrics and observability"
+    ]
+  }
+}

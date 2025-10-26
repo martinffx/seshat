@@ -1,0 +1,56 @@
+{
+  "product_vision": "Phase 1 MVP: Persistent storage layer for Seshat distributed key-value store. Must support >5,000 ops/sec with <10ms p99 latency and pass 11 chaos tests. Storage enables cluster recovery after restarts and maintains consistency across nodes.",
+  "existing_features": [
+    "RESP protocol parser/encoder (100% complete - 487 tests)",
+    "Raft consensus foundation (in design phase)"
+  ],
+  "storage_responsibilities": "Abstract RocksDB storage with column families, atomic batch writes, snapshot creation, iterator support, storage metrics, enforce data size limits. No understanding of Raft semantics - just stores bytes.",
+  "data_types_to_persist": [
+    "VersionedLogEntry - Raft log entries with schema versioning",
+    "RaftHardState - Current term, vote, commit index",
+    "ClusterMembership - Node registry with addresses and states",
+    "ShardMap - Shard assignments and replica placement",
+    "StoredValue - User key-value data with metadata and optional TTL",
+    "SnapshotMetadata - Snapshot tracking for log compaction"
+  ],
+  "column_family_design": {
+    "phase_1": [
+      "system_raft_log: System group Raft log entries (~10MB compacted)",
+      "system_raft_state: System group hard state (<1KB, fsync required)",
+      "system_data: Cluster metadata (~100KB)",
+      "data_raft_log: Data shard Raft log entries (~100MB compacted)",
+      "data_raft_state: Data shard hard state (<1KB, fsync required)",
+      "data_kv: User key-value data (unbounded)"
+    ],
+    "compaction_strategy": "Snapshot every 10,000 entries or 100MB log size using RocksDB checkpoints",
+    "configuration": "Lz4 compression, 64MB write buffer, 64MB SST files, prefix bloom filters for data_kv CF"
+  },
+  "testing_requirements": {
+    "tdd_workflow": "Test → Code → Refactor pattern required",
+    "test_types": [
+      "Unit tests: Column family operations",
+      "Integration tests: Snapshot consistency",
+      "Performance tests: Throughput and latency benchmarks",
+      "Property tests: Invariant checking with proptest"
+    ],
+    "chaos_tests": "Must support 11 chaos scenarios including node failures, partitions, and storage saturation"
+  },
+  "dependencies": {
+    "depends_on": ["common crate for shared types and error handling"],
+    "used_by": ["raft crate (implements Storage trait)", "kv crate (indirectly via raft)"]
+  },
+  "architecture_layer": "Storage Layer - bottom of stack, provides persistent state to Raft Layer above it",
+  "performance_targets": {
+    "throughput": ">5,000 ops/sec per node",
+    "latency": {
+      "GET": "<5ms p99",
+      "SET": "<10ms p99 (includes Raft replication)"
+    },
+    "key_operations": "<1ms p99 latency for storage-only ops"
+  },
+  "resource_limits": {
+    "max_key_size_bytes": 256,
+    "max_value_size_bytes": 65536,
+    "max_memory_per_raft_log_mb": 512
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "raw_user_story": "As a Redis client, I want to execute GET/SET/DEL commands over TCP so that I can store and retrieve key-value data in a distributed, fault-tolerant manner",
+  "raw_criteria": [
+    "Main binary starts Tokio TCP server on port 6379",
+    "Server parses incoming RESP commands (GET, SET, DEL, EXISTS, PING)",
+    "KV service routes commands to Raft consensus layer",
+    "Raft commits operations and persists to RocksDB storage",
+    "Clients receive RESP-formatted responses"
+  ],
+  "raw_rules": [
+    "Only Phase 1 commands supported (GET, SET, DEL, EXISTS, PING)",
+    "Operations must go through Raft consensus (strong consistency)",
+    "Failed operations return appropriate RESP error messages",
+    "Leader forwards write operations through Raft log"
+  ],
+  "raw_scope": {
+    "included": [
+      "TCP server setup in main binary (seshat crate)",
+      "RESP command parsing integration (protocol-resp already exists)",
+      "KV service layer implementation (kv crate)",
+      "Raft/storage integration for GET/SET/DEL operations",
+      "End-to-end request flow from TCP -> RESP -> KV -> Raft -> RocksDB"
+    ],
+    "excluded": [
+      "Multi-shard clustering (Phase 2)",
+      "Advanced Redis commands beyond Phase 1 scope",
+      "Dynamic cluster management (Phase 3)",
+      "Observability/metrics (Phase 4)",
+      "SQL interface (Phase 5)"
+    ]
+  }
+}

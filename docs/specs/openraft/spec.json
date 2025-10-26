@@ -1,0 +1,105 @@
+{
+  "feature": "openraft",
+  "user_story": "As a Seshat developer, I want to migrate from raft-rs to openraft so that we eliminate outdated transitive prost dependencies and gain a better-maintained Raft implementation with cleaner APIs",
+  "acceptance_criteria": [
+    "GIVEN existing raft-rs 0.7 dependency with prost-codec feature WHEN replaced with openraft THEN transitive prost 0.11 dependency is eliminated and unified prost 0.14 is used throughout",
+    "GIVEN openraft storage trait implementation WHEN integrated with MemStorage backend THEN storage operations (log entries, hard state, snapshots) work correctly in-memory",
+    "GIVEN openraft state machine implementation WHEN operations are proposed THEN operations are applied in correct order with strong consistency guarantees",
+    "GIVEN existing unit tests WHEN migrated to openraft THEN all tests pass with equivalent or better coverage"
+  ],
+  "business_rules": [
+    "Must eliminate prost version conflicts between raft library (0.11) and transport layer (0.14) - this is the primary motivation for the migration",
+    "Must maintain existing MemStorage in-memory design (no persistent storage implementation)",
+    "Must maintain existing logging and observability patterns using tracing crate with structured logging",
+    "Transport layer should have stub/placeholder implementation for future gRPC integration",
+    "No integration with KV service layer in this phase - focus on core migration only"
+  ],
+  "scope": {
+    "included": [
+      "Replace raft-rs 0.7 dependency with openraft in Cargo.toml (workspace-level change)",
+      "Implement openraft storage traits using existing MemStorage (in-memory)",
+      "Migrate state machine from raft-rs RawNode API to openraft API",
+      "Update RaftNode wrapper to use openraft::Raft instead of raft::RawNode",
+      "Remove prost 0.11 dependency and standardize on prost 0.14 throughout codebase",
+      "Update all unit tests in raft crate to work with openraft APIs",
+      "Add stub/placeholder for network transport (RaftNetwork trait)",
+      "Add tracing instrumentation for openraft operations (leader election, log replication)"
+    ],
+    "excluded": [
+      "RocksDB persistent storage implementation (future phase)",
+      "Full gRPC transport layer implementation (future phase)",
+      "Connection pooling and retry logic for network transport (future phase)",
+      "Integration with KV service layer (future phase)",
+      "RESP protocol integration (future phase)",
+      "Snapshot creation and restoration with RocksDB checkpoints (future phase)",
+      "Integration tests for 2-node and 3-node clusters (future phase)",
+      "Chaos testing implementation (future phase)",
+      "Performance benchmarking and optimization (future phase)",
+      "Changes to seshat main binary orchestration (separate task)",
+      "Bootstrap/join cluster formation modes (future phase)",
+      "Multi-shard cluster support (Phase 2 feature)",
+      "Dynamic cluster membership changes (Phase 3 feature)",
+      "Advanced observability features like OpenTelemetry (Phase 4 feature)",
+      "SQL interface support (Phase 5 feature)"
+    ]
+  },
+  "aligns_with": "Phase 1 MVP preparation - eliminates technical debt (prost version conflicts) and modernizes to better-maintained Raft library as foundation for future persistent storage and network transport implementation.",
+  "dependencies": [
+    "storage crate (seshat-storage) - MemStorage in-memory implementation",
+    "common crate (seshat-common) - shared types (NodeId, Error)",
+    "openraft crate (external dependency) - Raft consensus library to replace raft-rs",
+    "tokio 1.x - Async runtime",
+    "tracing crate - Structured logging for observability"
+  ],
+  "conflicts": [
+    "Existing raft-rs RawNode API differs from openraft::Raft API - requires wrapper updates in RaftNode",
+    "Current prost 0.11 dependency (from raft-rs eraftpb) conflicts with tonic 0.14 requiring prost 0.14 - this migration resolves the conflict",
+    "Test mocks and fixtures using raft-rs types need migration to openraft equivalents",
+    "MemStorage will need adaptation to openraft's storage trait interface"
+  ],
+  "technical_details": {
+    "interfaces_affected": [
+      "openraft storage traits - must be implemented for MemStorage backend",
+      "openraft::RaftStateMachine trait - applies committed operations to in-memory state",
+      "openraft::RaftNetwork trait - stub implementation for future gRPC transport",
+      "RaftNode wrapper struct - changes from raft::RawNode to openraft::Raft",
+      "Storage trait methods - must map to openraft storage requirements"
+    ],
+    "integration_points": [
+      "raft crate → storage crate: MemStorage for in-memory log and state storage",
+      "raft crate → common crate: Use shared types (NodeId, Error) throughout"
+    ],
+    "testing_requirements": [
+      "Unit tests for openraft storage trait implementation with MemStorage",
+      "Unit tests for state machine applying operations correctly",
+      "Unit tests for RaftNode wrapper with openraft::Raft",
+      "Property tests for entry serialization/deserialization round-trips"
+    ],
+    "data_migrations": [
+      "No data migrations required - keeping in-memory MemStorage",
+      "MemStorage API needs adaptation to openraft traits"
+    ],
+    "observability_requirements": [
+      "Add tracing spans for leader election with node_id and term fields",
+      "Add tracing spans for log replication with entry count and commit index",
+      "Log state machine operations at DEBUG level with operation type",
+      "Use tracing::instrument macro on key RaftNode methods",
+      "Ensure all errors include context for debugging (use thiserror with context)"
+    ],
+    "implementation_phases": [
+      "Phase 1: Replace raft-rs dependency, update Cargo.toml, resolve prost conflicts (1-2 hours)",
+      "Phase 2: Adapt MemStorage to implement openraft storage traits (2-3 hours)",
+      "Phase 3: Implement openraft::RaftStateMachine trait for in-memory operations (2-3 hours)",
+      "Phase 4: Create stub RaftNetwork implementation (1 hour)",
+      "Phase 5: Update RaftNode wrapper to use openraft::Raft API (2-3 hours)",
+      "Phase 6: Migrate unit tests to openraft equivalents, ensure all pass (2-3 hours)",
+      "Total estimated effort: 10-15 hours"
+    ],
+    "risk_mitigation": [
+      "Risk: openraft API significantly different from raft-rs → Mitigation: Review openraft examples and docs before implementation, create prototype wrapper",
+      "Risk: MemStorage incompatible with openraft traits → Mitigation: Study openraft storage trait requirements, adapt incrementally with tests",
+      "Risk: Prost version conflicts persist → Mitigation: Verify openraft uses prost 0.12+ and is compatible with tonic 0.14",
+      "Risk: Tests fail after migration → Mitigation: Migrate tests incrementally, maintain test coverage throughout"
+    ]
+  }
+}

@@ -1,0 +1,216 @@
+{
+  "feature": "rocksdb-storage",
+  "user_story": "As a Seshat node operator, I want persistent storage using RocksDB so that the cluster can recover state after restarts and maintain consistency across nodes",
+  "acceptance_criteria": [
+    "GIVEN a fresh node startup WHEN RocksDB initializes THEN all 6 column families (system_raft_log, system_raft_state, system_data, data_raft_log, data_raft_state, data_kv) are created with correct configuration",
+    "GIVEN a key-value operation WHEN storage.get/put/delete is called THEN operation completes with <1ms p99 latency for local storage access",
+    "GIVEN Raft log entries WHEN append/get_range/truncate operations execute THEN sequential ordering is preserved and no gaps exist in log indices",
+    "GIVEN an atomic batch write across multiple column families WHEN batch.commit is called THEN either all writes succeed or all fail (no partial commits)",
+    "GIVEN a snapshot trigger condition (10,000 entries OR 100MB) WHEN snapshot is created THEN RocksDB checkpoint succeeds and metadata records last_included_index",
+    "GIVEN a node restart WHEN RocksDB reopens existing database THEN all persisted data (keys, raft state, metadata) is accessible and version checks pass",
+    "GIVEN operations on different column families WHEN concurrent reads/writes occur THEN data isolation is maintained (no cross-contamination between CFs)"
+  ],
+  "business_rules": [
+    "System Raft log CF: Store system group Raft entries, compact after snapshot (~10MB typical size)",
+    "System Raft state CF: Single-key storage for hard state (term, vote, commit), MUST fsync before responding to RPCs",
+    "System data CF: Store cluster metadata (ClusterMembership, ShardMap), bounded ~100KB size",
+    "Data Raft log CF: Store data shard log entries, snapshot every 10,000 entries or 100MB, ~100MB typical compacted size",
+    "Data Raft state CF: Single-key storage for data shard hard state, MUST fsync before responding to RPCs",
+    "Data KV CF: Store user key-value data wrapped in StoredValue, unbounded size, optimize for point lookups",
+    "All write batches across column families MUST be atomic",
+    "All persisted structures MUST include version field for schema evolution",
+    "Key size limit: 256 bytes maximum (enforced by validation layer above storage)",
+    "Value size limit: 65,536 bytes maximum (enforced by validation layer above storage)",
+    "Raft log memory limit: 512MB per Raft group before forced compaction",
+    "Storage layer MUST NOT understand Raft semantics - only stores bytes as directed"
+  ],
+  "scope": {
+    "included": [
+      "RocksDB initialization with 6 column families and optimized configuration (Lz4 compression, 64MB buffers, prefix bloom filters)",
+      "CRUD operations per column family (get, put, delete, exists)",
+      "Atomic batch write operations across multiple column families",
+      "Raft log operations: append entry, get range of entries, truncate before index",
+      "Snapshot creation using RocksDB checkpoint (hard links, atomic)",
+      "Snapshot restoration from checkpoint directory",
+      "Configuration management: load/store NodeConfig, ClusterConfig, RaftConfig",
+      "Error handling with rich context propagation (thiserror)",
+      "Iterator support for range queries within column families",
+      "Storage metrics tracking (db_size_bytes, num_keys, snapshot_duration)"
+    ],
+    "excluded": [
+      "TTL expiration logic (Phase 2 - handled by higher layer)",
+      "Distributed locking implementation (Phase 2 - separate feature)",
+      "Metrics/observability export (Phase 4 - OpenTelemetry integration)",
+      "Multi-shard column family management (Phase 2 - dynamic shard creation)",
+      "Online schema migration tools (Phase 3 - separate migration system)",
+      "RocksDB tuning dashboard (Phase 4 - operational tooling)",
+      "Automatic compaction scheduling (use RocksDB defaults for Phase 1)"
+    ]
+  },
+  "technical_details": {
+    "column_families": [
+      {
+        "name": "system_raft_log",
+        "purpose": "System group Raft log entries",
+        "key_format": "log:{index}",
+        "value_type": "VersionedLogEntry (bincode)",
+        "size_estimate": "~10MB compacted",
+        "compaction": "Truncate after snapshot"
+      },
+      {
+        "name": "system_raft_state",
+        "purpose": "System group hard state",
+        "key_format": "state (single key)",
+        "value_type": "RaftHardState (bincode)",
+        "size_estimate": "<1KB",
+        "durability": "fsync required before RPC responses"
+      },
+      {
+        "name": "system_data",
+        "purpose": "Cluster metadata",
+        "key_format": "membership, shardmap",
+        "value_type": "ClusterMembership, ShardMap (bincode)",
+        "size_estimate": "~100KB bounded",
+        "compaction": "Automatic by RocksDB"
+      },
+      {
+        "name": "data_raft_log",
+        "purpose": "Data shard Raft log entries",
+        "key_format": "log:{index}",
+        "value_type": "VersionedLogEntry (bincode)",
+        "size_estimate": "~100MB compacted",
+        "compaction": "Snapshot every 10,000 entries or 100MB"
+      },
+      {
+        "name": "data_raft_state",
+        "purpose": "Data shard hard state",
+        "key_format": "state (single key)",
+        "value_type": "RaftHardState (bincode)",
+        "size_estimate": "<1KB",
+        "durability": "fsync required before RPC responses"
+      },
+      {
+        "name": "data_kv",
+        "purpose": "User key-value data",
+        "key_format": "raw user key (arbitrary bytes)",
+        "value_type": "StoredValue (bincode)",
+        "size_estimate": "unbounded (user data)",
+        "optimization": "Prefix bloom filters for point lookups"
+      }
+    ],
+    "data_structures": [
+      "VersionedLogEntry - Raft log entry with schema version, term, index, entry_type, data",
+      "RaftHardState - Persistent Raft state: version, term, vote, commit",
+      "ClusterMembership - Node registry with addresses and states",
+      "ShardMap - Shard assignments and replica placement",
+      "StoredValue - User data wrapper: version, data, created_at, expires_at (optional)",
+      "SnapshotMetadata - Snapshot tracking: last_included_index, last_included_term, membership, created_at, size_bytes"
+    ],
+    "rocksdb_configuration": {
+      "compression": "Lz4 (fast compression for all CFs)",
+      "write_buffer_size": "64MB per CF",
+      "max_write_buffer_number": 3,
+      "target_file_size_base": "64MB SST files",
+      "raft_log_compaction_style": "Level (sequential writes)",
+      "data_kv_optimization": "Fixed prefix (4 bytes) for hash-based routing, memtable prefix bloom 0.2 ratio"
+    },
+    "snapshot_strategy": {
+      "trigger": "Every 10,000 log entries OR 100MB log size",
+      "method": "RocksDB checkpoint using hard links (atomic, space-efficient)",
+      "process": [
+        "Create checkpoint at snapshots/snapshot-{timestamp}",
+        "Record SnapshotMetadata with last_included_index and last_included_term",
+        "Truncate Raft log entries before last_included_index",
+        "Update Raft state with new snapshot reference"
+      ],
+      "restoration": [
+        "Copy checkpoint directory to node data_dir",
+        "Open RocksDB instance",
+        "Read last_included_index from snapshot metadata",
+        "Replay log entries after snapshot if any exist"
+      ]
+    },
+    "performance_requirements": {
+      "local_storage_ops_p99": "<1ms (get, put, delete on single key)",
+      "batch_commit_p99": "<5ms (atomic writes across CFs)",
+      "snapshot_creation": "<10s for 100MB data",
+      "throughput_target": ">5,000 ops/sec per node (includes Raft overhead above storage)",
+      "concurrent_operations": "Thread-safe for concurrent reads and writes"
+    },
+    "durability_requirements": "Raft state CFs (system_raft_state, data_raft_state) MUST fsync before responding to RequestVote or AppendEntries RPCs. Other CFs use RocksDB default durability (WAL with periodic sync).",
+    "error_handling": "Use thiserror for library errors. Propagate RocksDB errors with context. Fail fast on version mismatches. Return Result<T, StorageError> for all operations."
+  },
+  "dependencies": {
+    "depends_on": [
+      "common crate - shared types (Error, Result, configuration structs)",
+      "rocksdb crate - underlying storage engine (v0.22+)",
+      "bincode crate - efficient binary serialization",
+      "serde crate - serialization trait implementations",
+      "thiserror crate - error type definitions"
+    ],
+    "used_by": [
+      "raft crate - implements raft-rs Storage trait using this storage layer",
+      "kv crate - indirectly via raft crate for persisting key-value operations",
+      "seshat binary - orchestrates initialization and lifecycle"
+    ],
+    "integration_points": [
+      "raft-rs Storage trait - storage layer must provide: append entries, get entries, snapshot, apply snapshot, hard state persistence",
+      "common::types - all data structures defined in data-structures.md",
+      "config loading - NodeConfig specifies data_dir path for RocksDB"
+    ]
+  },
+  "aligns_with": "Phase 1 MVP - Persistent storage foundation for single-shard cluster. Enables cluster recovery after restarts, provides durability for Raft consensus, and stores user key-value data. Critical blocker for 3-node cluster stability testing.",
+  "testing_strategy": {
+    "unit_tests": [
+      "Column family initialization and configuration verification",
+      "CRUD operations per column family with various data sizes",
+      "Atomic batch write success and rollback scenarios",
+      "Iterator range queries within column families",
+      "Version checking and deserialization error handling",
+      "Error propagation and context preservation",
+      "Concurrent read/write operations (thread safety)",
+      "Storage metrics accuracy (db_size, key count)"
+    ],
+    "integration_tests": [
+      "Snapshot creation and restoration full workflow",
+      "Node restart with existing database (persistence verification)",
+      "Raft log truncation after snapshot (gap detection)",
+      "Cross-column-family atomic batch writes",
+      "Configuration load/store roundtrip",
+      "Data isolation between column families (no contamination)",
+      "Large dataset operations (simulate 100MB log, 10K keys)"
+    ],
+    "property_tests": [
+      "Serialization roundtrip for all data structures (proptest)",
+      "Batch write atomicity under random operation sequences",
+      "Iterator correctness for arbitrary key ranges",
+      "Snapshot consistency under concurrent writes"
+    ],
+    "performance_tests": [
+      "Single key operation latency (p50, p99, p999) must be <1ms p99",
+      "Batch write throughput with varying batch sizes",
+      "Snapshot creation time for 100MB dataset (<10s)",
+      "Concurrent operation throughput (simulate 5,000 ops/sec load)",
+      "Memory usage under sustained write load (must stay under 512MB per Raft log)"
+    ],
+    "chaos_tests_support": [
+      "Test 5: Storage media failure - verify graceful error handling and restart recovery",
+      "Test 11: Storage saturation - enforce resource limits and reject operations cleanly"
+    ],
+    "tdd_workflow": "RED → GREEN → REFACTOR pattern. Write failing test first, implement minimal code to pass, refactor for clarity. All acceptance criteria must have corresponding tests before implementation."
+  },
+  "validation_checks": {
+    "conflicts_with_existing": "None - RESP protocol is complete and independent. Raft implementation expects this storage layer via Storage trait.",
+    "missing_requirements": "None identified - all architectural requirements from data-structures.md and tech.md are covered.",
+    "testability": "All acceptance criteria are testable with concrete pass/fail conditions (latency thresholds, data persistence verification, atomicity checks).",
+    "phase_1_alignment": "Fully aligned - RocksDB storage is listed as P2-HIGH priority in roadmap with 12-15h estimated effort. Blocks cluster stability testing and chaos tests."
+  },
+  "notes": [
+    "This storage layer is deliberately simple - no understanding of Raft semantics, just byte storage with column family organization",
+    "Phase 1 uses fixed 6 column families. Phase 2 will add per-shard CFs dynamically",
+    "TTL handling is deferred to Phase 2 but StoredValue structure includes expires_at field for future use",
+    "Observability metrics are tracked but not exported until Phase 4 OpenTelemetry integration",
+    "All data structures include version fields from day 1 to enable future schema evolution without breaking changes",
+    "RocksDB checkpoint snapshots use hard links - fast and space-efficient, no data copying required"
+  ]
+}

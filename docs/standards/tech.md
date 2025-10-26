@@ -8,7 +8,7 @@
 - **Consensus**: raft-rs 0.7+
 - **Storage**: RocksDB 0.22+ (via rocksdb crate)
 - **RPC Framework**: gRPC (tonic 0.11+ / prost 0.12+)
-- **Serialization**: Protobuf (for internal RPC), bincode (for storage)
+- **Serialization**: Protobuf (prost 0.12+) for all serialization (internal RPC and storage)
 - **Error Handling**: thiserror (libraries), anyhow (binary)
 - **Logging**: tracing + tracing-subscriber
 - **Testing**: proptest (property tests), tokio-test
@@ -188,15 +188,16 @@ Each node runs a **single RocksDB instance** with multiple **column families** f
 
 **Example**:
 ```rust
-// Write log entry
+// Write log entry (in raft crate, not storage crate)
 let entry = VersionedLogEntry {
     version: 1,
     term: 5,
     index: 142,
     entry_type: EntryType::Normal,
-    data: bincode::serialize(&membership_change)?,
+    data: membership_change.encode_to_vec(),
 };
-storage.put("system_raft_log", b"log:142", bincode::serialize(&entry)?)?;
+let serialized = entry.encode_to_vec();
+storage.put("system_raft_log", b"log:142", &serialized)?;
 ```
 
 #### 2. `system_raft_state`
@@ -214,14 +215,15 @@ storage.put("system_raft_log", b"log:142", bincode::serialize(&entry)?)?;
 
 **Example**:
 ```rust
-// Update hard state
+// Update hard state (in raft crate, not storage crate)
 let hard_state = RaftHardState {
     version: 1,
     term: 5,
     vote: Some(1),  // Voted for node 1
     commit: 142,
 };
-storage.put("system_raft_state", b"state", bincode::serialize(&hard_state)?)?;
+let serialized = hard_state.encode_to_vec();
+storage.put("system_raft_state", b"state", &serialized)?;
 storage.sync()?;  // CRITICAL: fsync before responding
 ```
 
@@ -230,7 +232,7 @@ storage.sync()?;  // CRITICAL: fsync before responding
 
 **Key Format**: `membership` and `shardmap`
 
-**Value Format**: Bincode-serialized `ClusterMembership` / `ShardMap`
+**Value Format**: Protobuf-serialized `ClusterMembership` / `ShardMap`
 
 **Update Frequency**: On membership changes, shard rebalancing
 
@@ -238,7 +240,7 @@ storage.sync()?;  // CRITICAL: fsync before responding
 
 **Example**:
 ```rust
-// Store cluster membership
+// Store cluster membership (in raft crate, not storage crate)
 let membership = ClusterMembership {
     version: 1,
     members: HashMap::from([
@@ -248,7 +250,8 @@ let membership = ClusterMembership {
     ]),
     membership_version: 1,
 };
-storage.put("system_data", b"membership", bincode::serialize(&membership)?)?;
+let serialized = membership.encode_to_vec();
+storage.put("system_data", b"membership", &serialized)?;
 ```
 
 #### 4. `data_raft_log`
@@ -256,7 +259,7 @@ storage.put("system_data", b"membership", bincode::serialize(&membership)?)?;
 
 **Key Format**: `log:{index}`
 
-**Value Format**: Bincode-serialized `VersionedLogEntry`
+**Value Format**: Protobuf-serialized `VersionedLogEntry`
 
 **Compaction**: Snapshot every 10,000 entries or 100MB
 
@@ -267,7 +270,7 @@ storage.put("system_data", b"membership", bincode::serialize(&membership)?)?;
 
 **Key Format**: `state`
 
-**Value Format**: Bincode-serialized `RaftHardState`
+**Value Format**: Protobuf-serialized `RaftHardState`
 
 **Durability**: fsync required
 
@@ -276,7 +279,7 @@ storage.put("system_data", b"membership", bincode::serialize(&membership)?)?;
 
 **Key Format**: Raw user key (arbitrary bytes)
 
-**Value Format**: Bincode-serialized `StoredValue`
+**Value Format**: Protobuf-serialized `StoredValue`
 
 **Size**: Unbounded (user data)
 
@@ -284,18 +287,19 @@ storage.put("system_data", b"membership", bincode::serialize(&membership)?)?;
 
 **Example**:
 ```rust
-// SET foo bar
+// SET foo bar (in state machine, not storage crate)
 let value = StoredValue {
     version: 1,
     data: b"bar".to_vec(),
     created_at: current_timestamp_ms(),
     expires_at: None,
 };
-storage.put("data_kv", b"foo", bincode::serialize(&value)?)?;
+let serialized = value.encode_to_vec();
+storage.put("data_kv", b"foo", &serialized)?;
 
-// GET foo
+// GET foo (in state machine, not storage crate)
 let bytes = storage.get("data_kv", b"foo")?;
-let stored: StoredValue = bincode::deserialize(&bytes)?;
+let stored: StoredValue = StoredValue::decode(&bytes[..])?;
 // Returns: b"bar"
 ```
 

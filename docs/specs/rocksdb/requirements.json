@@ -1,0 +1,39 @@
+{
+  "raw_user_story": "As a Seshat node operator, I want persistent storage using RocksDB so that the cluster can recover state after restarts and maintain consistency across nodes.",
+  "raw_criteria": [
+    "Store implements 6 column families (keys, raft_log, raft_state, snapshots, metadata, locks)",
+    "Key operations (get, set, delete, exists) complete with <1ms p99 latency",
+    "Raft log operations (append, range query, truncate) preserve ordering",
+    "Snapshot creation and restoration work correctly",
+    "All data survives node restarts (persistence verification)",
+    "Column family isolation prevents cross-contamination"
+  ],
+  "raw_rules": [
+    "Keys CF: TTL support (Phase 2+), no size limit enforced yet",
+    "Raft log CF: Sequential log indices, no gaps allowed",
+    "Raft state CF: Single-key storage (current term, voted for)",
+    "Snapshots CF: Store snapshot metadata + data blob",
+    "Metadata CF: Cluster config, node ID",
+    "Locks CF: Distributed locking (Phase 2+)",
+    "Write batches must be atomic across column families",
+    "Read-heavy workload optimization (caching, bloom filters)"
+  ],
+  "raw_scope": {
+    "included": [
+      "RocksDB initialization with 6 column families",
+      "CRUD operations per column family",
+      "Atomic batch writes",
+      "Raft log operations (append, get range, truncate)",
+      "Snapshot storage and retrieval",
+      "Configuration management",
+      "Error handling and retries"
+    ],
+    "excluded": [
+      "TTL expiration (Phase 2)",
+      "Distributed locking (Phase 2)",
+      "Metrics/observability (Phase 4)",
+      "Multi-shard support (Phase 2)",
+      "Online schema migration (Phase 3)"
+    ]
+  }
+}

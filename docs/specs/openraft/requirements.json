@@ -1,0 +1,29 @@
+{
+  "raw_user_story": "As a Seshat developer, I want to migrate from raft-rs to openraft so that we eliminate outdated transitive prost dependencies and gain a better-maintained Raft implementation",
+  "raw_criteria": [
+    "openraft replaces raft-rs removing the outdated transitive prost dependency",
+    "All existing Raft functionality (leader election, log replication) works with openraft",
+    "RocksDB storage backend integrates with openraft's storage trait"
+  ],
+  "raw_rules": [
+    "Must maintain compatibility with existing storage layer (6 RocksDB column families)",
+    "Must support gRPC transport for inter-node communication",
+    "Must preserve log compaction and snapshot capabilities"
+  ],
+  "raw_scope": {
+    "included": [
+      "Replace raft-rs dependency with openraft",
+      "Implement openraft storage trait using RocksDB",
+      "Implement gRPC transport layer for inter-node communication",
+      "Update raft/ crate implementation",
+      "Replace in-memory KV with RocksDB-backed storage"
+    ],
+    "excluded": [
+      "Changes to KV service layer or RESP protocol",
+      "New Raft features beyond current raft-rs functionality",
+      "Performance optimizations beyond maintaining current benchmarks",
+      "Storage schema changes"
+    ]
+  },
+  "context_notes": "Current implementation uses in-memory KV store. RESP protocol not yet connected to Raft. Need to implement both gRPC inter-node communication and RocksDB persistence as part of migration."
+}
