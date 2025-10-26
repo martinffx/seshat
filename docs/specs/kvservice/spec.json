@@ -1,0 +1,186 @@
+{
+  "feature": "kvservice",
+  "user_story": "As a Redis client, I want to execute GET/SET/DEL commands over TCP so that I can store and retrieve key-value data in a distributed, fault-tolerant manner using strong consistency guarantees",
+  "acceptance_criteria": [
+    "GIVEN the seshat binary starts WHEN the TCP server binds to port 6379 THEN Redis clients can successfully connect and establish sessions",
+    "GIVEN a Redis client sends a SET command WHEN the command is parsed by RespCodec THEN KvService receives a valid RespCommand::Set with key and value",
+    "GIVEN KvService receives a SET command WHEN it calls RaftNode::propose() THEN the operation is replicated to a quorum of nodes and committed via Raft consensus",
+    "GIVEN a SET operation is committed WHEN the StateMachine applies the entry THEN the key-value pair is persisted to the data_kv column family in RocksDB",
+    "GIVEN a Redis client sends a GET command WHEN the node is the leader THEN it reads from the local StateMachine and returns the value in RESP format",
+    "GIVEN a Redis client sends a command WHEN the node is not the leader THEN it returns a MOVED error with the leader's node ID",
+    "GIVEN a Redis client sends a DEL command WHEN it is committed via Raft THEN the key is removed from storage and the deletion count is returned",
+    "GIVEN a Redis client sends an EXISTS command WHEN checked against storage THEN it returns the count of existing keys",
+    "GIVEN a Redis client sends a PING command THEN it receives a PONG response (or the echo message if provided)",
+    "GIVEN any operation fails due to quorum loss WHEN processed THEN the client receives a NOQUORUM error response",
+    "GIVEN a key exceeds 256 bytes WHEN validated THEN the client receives 'ERR key too large' error",
+    "GIVEN a value exceeds 64KB WHEN validated THEN the client receives 'ERR value too large' error"
+  ],
+  "business_rules": [
+    "Only Phase 1 commands are supported: GET, SET, DEL, EXISTS, PING",
+    "All write operations (SET, DEL) must go through Raft consensus for strong consistency",
+    "Read operations (GET, EXISTS) are performed on the leader only (no stale reads in Phase 1)",
+    "Operations must achieve a majority quorum (2 out of 3 nodes) to commit",
+    "Non-leader nodes must redirect clients to the current leader using MOVED errors",
+    "Maximum key size is 256 bytes (enforced before Raft proposal)",
+    "Maximum value size is 64KB (enforced before Raft proposal)",
+    "Failed operations return appropriate RESP error messages with context",
+    "The leader node forwards write operations through the Raft log",
+    "Committed operations are applied to the StateMachine in log order",
+    "PING commands bypass Raft consensus and return immediately",
+    "Request timeout is 30 seconds (from configuration)",
+    "Raft RPC timeout is 5 seconds (from configuration)"
+  ],
+  "scope": {
+    "included": [
+      "TCP server initialization in seshat main binary on port 6379",
+      "Integration with protocol-resp crate for RESP command parsing and response encoding",
+      "KvService struct in kv crate for command routing and validation",
+      "Command validation (key/value size limits, command syntax)",
+      "Integration with raft crate (RaftNode::propose() for writes, read_local() for reads)",
+      "Error handling for NOT_LEADER scenarios (return MOVED errors with leader ID)",
+      "Error handling for NOQUORUM scenarios (cannot reach majority)",
+      "Error handling for invalid commands (syntax errors, size violations)",
+      "End-to-end request flow: TCP → RespCodec → KvService → RaftNode → StateMachine → RocksDB",
+      "Response formatting in RESP protocol",
+      "Support for GET, SET, DEL, EXISTS, PING commands",
+      "Leader-only read path for strong consistency",
+      "Write path through Raft consensus with quorum requirement"
+    ],
+    "excluded": [
+      "Advanced Redis commands beyond Phase 1 scope (TTL, EXPIRE, etc.)",
+      "Multi-shard clustering (Phase 2 feature)",
+      "Stale reads from followers (Phase 1 uses leader-only reads)",
+      "Dynamic cluster management (adding/removing nodes during runtime - Phase 3)",
+      "Observability metrics and tracing (Phase 4 feature)",
+      "SQL interface (Phase 5 feature)",
+      "Redis Cluster protocol support (CLUSTER commands)",
+      "Redis pub/sub functionality",
+      "Redis transactions (MULTI/EXEC)",
+      "Redis pipelining optimization (Phase 1 processes commands sequentially)"
+    ]
+  },
+  "aligns_with": "Phase 1 MVP goals from product vision: Enable Redis clients to execute basic commands (GET, SET, DEL, EXISTS, PING) against a distributed, fault-tolerant 3-node cluster with strong consistency guarantees via Raft consensus",
+  "dependencies": [
+    "protocol-resp crate (100% complete - provides RespCodec, RespCommand, RespValue for parsing and encoding)",
+    "raft crate (in progress - provides RaftNode wrapper, gRPC transport, StateMachine, MemStorage)",
+    "storage crate (in progress - provides MemStorage implementation of raft::Storage trait, will migrate to RocksDB)",
+    "common crate (provides shared types: NodeId, Error, Result, configuration types)",
+    "seshat binary (orchestration - needs TCP server on port 6379 that routes to KvService)"
+  ],
+  "technical_details": {
+    "components": [
+      "seshat/main.rs: Main binary that starts TCP listener on port 6379",
+      "kv/src/service.rs: KvService struct with handle_command() method",
+      "kv/src/handlers.rs: Individual command handlers (handle_get, handle_set, handle_del, etc.)",
+      "kv/src/validation.rs: Input validation (key/value size limits)",
+      "kv/src/error.rs: KV-specific error types",
+      "seshat/src/server.rs: TCP server using Tokio with RespCodec framing"
+    ],
+    "integration_points": [
+      "RespCodec::decode() from protocol-resp crate for parsing incoming RESP commands",
+      "RespCodec::encode() from protocol-resp crate for serializing RESP responses",
+      "RaftNode::propose(operation: Vec<u8>) for write operations (SET, DEL)",
+      "RaftNode::read_local(key: Vec<u8>) for read operations (GET, EXISTS)",
+      "RaftNode::is_leader() to check leadership status",
+      "RaftNode::leader_id() to get current leader for MOVED errors",
+      "StateMachine::apply(entry: Entry) applies committed operations to storage",
+      "Storage::get(cf: &str, key: &[u8]) reads from data_kv column family",
+      "Storage::put(cf: &str, key: &[u8], value: &[u8]) writes to data_kv column family"
+    ],
+    "error_handling": [
+      "MOVED errors when not leader: Return '-MOVED {leader_id}\\r\\n' in RESP format",
+      "NOQUORUM errors when cannot reach majority: Return '-(error) NOQUORUM\\r\\n'",
+      "Key size validation: Return '-(error) ERR key too large\\r\\n' if key > 256 bytes",
+      "Value size validation: Return '-(error) ERR value too large\\r\\n' if value > 64KB",
+      "Invalid command syntax: Return '-(error) ERR unknown command\\r\\n'",
+      "Raft proposal timeout: Return '-(error) ERR timeout\\r\\n' after 30 seconds",
+      "Storage errors: Return '-(error) ERR storage failure\\r\\n' for RocksDB errors",
+      "Connection errors: Close TCP connection and log error"
+    ],
+    "data_flow": {
+      "write_path": [
+        "1. Client sends 'SET foo bar' over TCP connection",
+        "2. Tokio TCP listener receives bytes",
+        "3. RespCodec::decode() parses to RespCommand::Set { key: b'foo', value: b'bar' }",
+        "4. KvService::handle_command(RespCommand::Set) called",
+        "5. KvService::validate_key_size(b'foo') - check <= 256 bytes",
+        "6. KvService::validate_value_size(b'bar') - check <= 64KB",
+        "7. KvService creates Operation::Set { key: b'foo', value: b'bar' }",
+        "8. Serialize operation: let data = bincode::serialize(&operation)?",
+        "9. KvService calls RaftNode::propose(data)",
+        "10. RaftNode checks is_leader() - if false, return NotLeader(leader_id)",
+        "11. RaftNode::propose() calls raft_rs::RawNode::propose(entry)",
+        "12. raft-rs replicates entry to followers via gRPC (AppendEntries RPC)",
+        "13. Once majority commits, raft-rs calls StateMachine::apply(entry)",
+        "14. StateMachine deserializes operation from entry.data",
+        "15. StateMachine::apply_set(key, value) calls Storage::put('data_kv', key, value)",
+        "16. RocksDB writes to data_kv column family",
+        "17. RaftNode::propose() returns Ok(())",
+        "18. KvService returns RespValue::SimpleString('OK')",
+        "19. RespCodec::encode() serializes to '+OK\\r\\n'",
+        "20. Bytes sent back to client over TCP"
+      ],
+      "read_path": [
+        "1. Client sends 'GET foo' over TCP connection",
+        "2. Tokio TCP listener receives bytes",
+        "3. RespCodec::decode() parses to RespCommand::Get { key: b'foo' }",
+        "4. KvService::handle_command(RespCommand::Get) called",
+        "5. KvService calls RaftNode::is_leader()",
+        "6. If not leader: return NotLeader(leader_id) → format MOVED error",
+        "7. If leader: KvService calls RaftNode::read_local(b'foo')",
+        "8. RaftNode accesses StateMachine (in-memory HashMap in Phase 1)",
+        "9. StateMachine::get(b'foo') returns Option<Vec<u8>>",
+        "10. If Some(value): return RespValue::BulkString(value)",
+        "11. If None: return RespValue::Null",
+        "12. RespCodec::encode() serializes to '$3\\r\\nbar\\r\\n' or '$-1\\r\\n'",
+        "13. Bytes sent back to client over TCP"
+      ]
+    },
+    "architecture_layers": [
+      "Layer 1 (Protocol): protocol-resp crate parses RESP commands and encodes responses",
+      "Layer 2 (Service): kv crate validates commands and routes to Raft",
+      "Layer 3 (Consensus): raft crate replicates writes and manages state machine",
+      "Layer 4 (Storage): storage crate persists data to RocksDB (or MemStorage in development)",
+      "Layer 5 (Transport): TCP server in seshat binary handles client connections"
+    ],
+    "performance_considerations": [
+      "TCP connection pooling: Tokio handles concurrent connections efficiently",
+      "Zero-copy parsing: RespCodec uses bytes::Bytes to avoid allocations",
+      "Async I/O: All network operations use tokio::net::TcpListener and async/await",
+      "Batching: Raft batches log entries internally for replication efficiency",
+      "Leader reads: Avoid network round-trip by reading from local StateMachine",
+      "Connection limits: Max 10,000 concurrent client connections (from configuration)",
+      "Request timeout: 30 seconds prevents client connections from hanging indefinitely",
+      "Raft RPC timeout: 5 seconds for internal node communication"
+    ],
+    "testing_strategy": [
+      "Unit tests: KvService command handlers with mock RaftNode",
+      "Integration tests: Full request flow with in-memory Raft cluster",
+      "End-to-end tests: Redis client (redis-cli or redis-rs) against running cluster",
+      "Error scenario tests: NOT_LEADER, NOQUORUM, size limit violations",
+      "Concurrency tests: Multiple concurrent SET operations maintain consistency",
+      "Chaos tests: Leader failure during SET operation (no data loss)",
+      "Performance tests: redis-benchmark compatibility, measure ops/sec and latency"
+    ]
+  },
+  "success_criteria": [
+    "redis-cli can connect to any node in the cluster on port 6379",
+    "GET/SET/DEL/EXISTS/PING commands execute successfully with correct RESP responses",
+    "Write operations (SET, DEL) replicate to all 3 nodes via Raft consensus",
+    "Read operations (GET, EXISTS) return consistent values from the leader",
+    "Non-leader nodes correctly redirect clients with MOVED errors",
+    "Key size and value size limits are enforced with appropriate error messages",
+    "NOQUORUM errors returned when majority of nodes are unavailable",
+    "Cluster passes end-to-end integration test: SET on node 1 → GET from node 2 returns same value",
+    "Cluster survives leader failure: Kill leader → new leader elected → SET/GET continue working",
+    "Performance targets met: >5,000 ops/sec, GET <5ms p99, SET <10ms p99"
+  ],
+  "future_enhancements": [
+    "Phase 2: Multi-shard support (route commands to appropriate shard based on key hash)",
+    "Phase 2: Cross-shard commands (MGET, MSET)",
+    "Phase 3: Dynamic membership (add/remove nodes via CLUSTER commands)",
+    "Phase 4: Follower reads with bounded staleness (trade consistency for read scalability)",
+    "Phase 4: Observability (OpenTelemetry metrics, distributed tracing)",
+    "Phase 5: SQL interface (parallel service layer using same Raft/storage infrastructure)"
+  ]
+}

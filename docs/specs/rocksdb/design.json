@@ -1,0 +1,754 @@
+{
+  "requirements": {
+    "entities": [
+      "Storage - Main struct managing RocksDB instance and column families",
+      "StorageOptions - Configuration for RocksDB initialization (paths, options per CF)",
+      "ColumnFamily - Type-safe enum for 6 column families",
+      "WriteBatch - Atomic multi-CF write operations",
+      "StorageIterator - Iterator for range queries within column families",
+      "StorageMetrics - Tracking db_size_bytes, num_keys, snapshot_duration",
+      "StorageError - Rich error context with thiserror"
+    ],
+    "data_persistence": {
+      "column_families": [
+        "system_raft_log - System group Raft log entries (key: log:{index}, value: VersionedLogEntry)",
+        "system_raft_state - System group hard state (key: state, value: RaftHardState, fsync required)",
+        "system_data - Cluster metadata (keys: membership/shardmap, values: ClusterMembership/ShardMap)",
+        "data_raft_log - Data shard Raft log entries (key: log:{index}, value: VersionedLogEntry)",
+        "data_raft_state - Data shard hard state (key: state, value: RaftHardState, fsync required)",
+        "data_kv - User key-value data (key: raw bytes, value: StoredValue)"
+      ],
+      "serialization": "bincode - efficient binary serialization for all persisted structures",
+      "snapshot_strategy": "RocksDB checkpoint using hard links (atomic, space-efficient, no data copying)"
+    },
+    "api_needed": {
+      "public_interface": "Storage struct with public methods (no trait needed for Phase 1)",
+      "operations": [
+        "get(cf, key) -> Result<Option<Vec<u8>>>",
+        "put(cf, key, value) -> Result<()>",
+        "delete(cf, key) -> Result<()>",
+        "exists(cf, key) -> Result<bool>",
+        "batch_write(batch) -> Result<()>",
+        "append_log_entry(cf, index, entry) -> Result<()>",
+        "get_log_range(cf, start_index, end_index) -> Result<Vec<VersionedLogEntry>>",
+        "truncate_log_before(cf, index) -> Result<()>",
+        "create_snapshot(path) -> Result<SnapshotMetadata>",
+        "restore_snapshot(path) -> Result<()>",
+        "iterator(cf, range) -> Result<StorageIterator>",
+        "metrics() -> StorageMetrics"
+      ]
+    },
+    "components": {
+      "main_struct": "Storage - Owns RocksDB DB instance, manages column family handles, provides thread-safe access via Arc<DB>",
+      "helper_types": [
+        "WriteBatch - Builder pattern for atomic multi-CF writes",
+        "StorageIterator - Wrapper around RocksDB iterator with key/value decoding",
+        "ColumnFamilyHandle - Internal wrapper for RocksDB CF handles",
+        "CheckpointManager - Helper for snapshot creation and restoration"
+      ]
+    },
+    "business_rules": [
+      "All write batches across column families MUST be atomic (use RocksDB WriteBatch)",
+      "Raft state CFs (system_raft_state, data_raft_state) MUST fsync before returning from put()",
+      "All persisted structures MUST include version field for schema evolution (checked on deserialization)",
+      "Sequential ordering MUST be preserved for Raft log entries (no gaps in indices)",
+      "Storage layer MUST NOT understand Raft semantics - only stores bytes as directed",
+      "Version mismatches MUST cause fail-fast errors (refuse to start with incompatible data)",
+      "Concurrent reads and writes MUST be thread-safe (RocksDB guarantees this)",
+      "Snapshot creation MUST be atomic (checkpoint or nothing)",
+      "Iterator results MUST be consistent within snapshot isolation"
+    ],
+    "domains": [
+      "Storage layer only - lowest level in architecture",
+      "No Raft logic (handled by raft crate above)",
+      "No protocol parsing (handled by protocol-resp crate)",
+      "No business logic (handled by kv service layer)",
+      "Pure persistence abstraction over RocksDB"
+    ]
+  },
+  "technical_needs": {
+    "core_types": {
+      "Storage": {
+        "description": "Main storage abstraction wrapping RocksDB with column family management",
+        "fields": [
+          "db: Arc<DB> - Shared RocksDB instance for multi-threaded access",
+          "cf_handles: HashMap<ColumnFamily, Arc<BoundColumnFamily>> - Column family handle cache",
+          "metrics: Arc<RwLock<StorageMetrics>> - Thread-safe metrics tracking",
+          "config: StorageOptions - Immutable configuration"
+        ],
+        "methods": [
+          "new(options: StorageOptions) -> Result<Self> - Open or create RocksDB with all CFs",
+          "get(cf: ColumnFamily, key: &[u8]) -> Result<Option<Vec<u8>>> - Point read from CF",
+          "put(cf: ColumnFamily, key: &[u8], value: &[u8]) -> Result<()> - Write to CF (fsync for state CFs)",
+          "delete(cf: ColumnFamily, key: &[u8]) -> Result<()> - Delete from CF",
+          "exists(cf: ColumnFamily, key: &[u8]) -> Result<bool> - Check key existence",
+          "batch_write(batch: WriteBatch) -> Result<()> - Atomic multi-CF write",
+          "append_log_entry(cf: ColumnFamily, index: u64, entry: &[u8]) -> Result<()> - Optimized log append",
+          "get_log_range(cf: ColumnFamily, start: u64, end: u64) -> Result<Vec<Vec<u8>>> - Scan log range",
+          "truncate_log_before(cf: ColumnFamily, index: u64) -> Result<()> - Delete log entries < index",
+          "create_snapshot(path: &Path) -> Result<SnapshotMetadata> - Create RocksDB checkpoint",
+          "restore_snapshot(path: &Path) -> Result<()> - Restore from checkpoint",
+          "iterator(cf: ColumnFamily, mode: IteratorMode) -> Result<StorageIterator> - Create CF iterator",
+          "metrics(&self) -> StorageMetrics - Get current metrics snapshot",
+          "sync(&self) -> Result<()> - Force fsync of WAL",
+          "close(self) -> Result<()> - Graceful shutdown"
+        ],
+        "thread_safety": "Arc<DB> enables safe multi-threaded access; RocksDB handles internal synchronization",
+        "lifecycle": "Created on node startup, closed on shutdown; survives across Raft leader changes"
+      },
+      "StorageOptions": {
+        "description": "Configuration for RocksDB initialization",
+        "fields": [
+          "data_dir: PathBuf - Base directory for RocksDB files",
+          "create_if_missing: bool - Create DB if doesn't exist (true for bootstrap, false for join)",
+          "compression: CompressionType - Compression algorithm (Lz4 for Phase 1)",
+          "write_buffer_size_mb: usize - Per-CF write buffer size (64MB default)",
+          "max_write_buffer_number: usize - Number of memtables (3 default)",
+          "target_file_size_mb: usize - SST file size target (64MB default)",
+          "max_open_files: i32 - OS file handle limit (-1 for unlimited)",
+          "enable_statistics: bool - RocksDB internal stats (true for Phase 4)",
+          "cf_options: HashMap<ColumnFamily, CFOptions> - Per-CF tuning"
+        ],
+        "methods": [
+          "default() -> Self - Sensible defaults for Phase 1",
+          "with_data_dir(path: PathBuf) -> Self - Builder pattern",
+          "validate(&self) -> Result<()> - Pre-startup validation"
+        ]
+      },
+      "CFOptions": {
+        "description": "Per-column-family RocksDB options",
+        "fields": [
+          "compaction_style: DBCompactionStyle - Level vs Universal (Level for Raft logs)",
+          "disable_auto_compactions: bool - Manual compaction control (false default)",
+          "level0_file_num_compaction_trigger: i32 - Compaction threshold (4 default)",
+          "write_buffer_size: usize - Override global write buffer",
+          "prefix_extractor: Option<SliceTransform> - For prefix bloom filters (data_kv only)"
+        ]
+      },
+      "ColumnFamily": {
+        "description": "Type-safe enum for all column families",
+        "variants": [
+          "SystemRaftLog - System Raft group log entries",
+          "SystemRaftState - System Raft group hard state",
+          "SystemData - Cluster metadata",
+          "DataRaftLog - Data shard Raft log entries",
+          "DataRaftState - Data shard hard state",
+          "DataKv - User key-value data"
+        ],
+        "methods": [
+          "as_str(&self) -> &'static str - RocksDB CF name",
+          "all() -> [ColumnFamily; 6] - All CFs for initialization",
+          "requires_fsync(&self) -> bool - True for *_raft_state CFs",
+          "default_options(&self) -> CFOptions - Optimized options per CF type"
+        ],
+        "design_rationale": "Enum prevents typos and enables compile-time CF validation"
+      },
+      "WriteBatch": {
+        "description": "Builder for atomic multi-CF write operations",
+        "fields": [
+          "inner: rocksdb::WriteBatch - Underlying RocksDB batch",
+          "cfs: Vec<ColumnFamily> - Track CFs being written (for fsync decision)"
+        ],
+        "methods": [
+          "new() -> Self - Create empty batch",
+          "put(cf: ColumnFamily, key: &[u8], value: &[u8]) -> &mut Self - Add put operation",
+          "delete(cf: ColumnFamily, key: &[u8]) -> &mut Self - Add delete operation",
+          "clear(&mut self) - Reset batch",
+          "is_empty(&self) -> bool - Check if batch has operations",
+          "requires_fsync(&self) -> bool - True if any CF requires fsync"
+        ],
+        "atomicity_guarantee": "All operations succeed or all fail; no partial writes visible"
+      },
+      "StorageIterator": {
+        "description": "Wrapper around RocksDB iterator with consistent semantics",
+        "fields": [
+          "inner: rocksdb::DBIterator - Underlying RocksDB iterator",
+          "cf: ColumnFamily - Column family being iterated"
+        ],
+        "methods": [
+          "seek(&mut self, key: &[u8]) - Position iterator at key or next greater",
+          "seek_to_first(&mut self) - Position at start of CF",
+          "seek_to_last(&mut self) - Position at end of CF",
+          "next(&mut self) -> Option<Result<(Box<[u8]>, Box<[u8]>)>> - Advance forward",
+          "prev(&mut self) -> Option<Result<(Box<[u8]>, Box<[u8]>)>> - Advance backward",
+          "valid(&self) -> bool - Check if iterator positioned at valid entry"
+        ],
+        "snapshot_isolation": "Iterator sees consistent snapshot of data at creation time"
+      },
+      "IteratorMode": {
+        "description": "Iterator positioning mode",
+        "variants": [
+          "Start - From first key in CF",
+          "End - From last key in CF",
+          "From(Vec<u8>, Direction) - From specific key in direction"
+        ]
+      },
+      "StorageMetrics": {
+        "description": "Runtime metrics for monitoring",
+        "fields": [
+          "db_size_bytes: u64 - Total disk usage across all CFs",
+          "num_keys: HashMap<ColumnFamily, u64> - Key count per CF",
+          "last_snapshot_duration_ms: u64 - Most recent snapshot creation time",
+          "write_ops_total: u64 - Cumulative write operations",
+          "read_ops_total: u64 - Cumulative read operations",
+          "bytes_written: u64 - Total bytes written",
+          "bytes_read: u64 - Total bytes read"
+        ],
+        "methods": [
+          "new() -> Self - Initialize with zeros",
+          "update_from_db(&mut self, db: &DB) - Refresh from RocksDB internal stats"
+        ],
+        "update_frequency": "On-demand via metrics() call; no background thread needed in Phase 1"
+      },
+      "StorageError": {
+        "description": "Rich error context using thiserror",
+        "variants": [
+          "RocksDb(rocksdb::Error) - Underlying RocksDB errors",
+          "Io(std::io::Error) - File system errors",
+          "Serialization(bincode::Error) - Serialization failures",
+          "ColumnFamilyNotFound(String) - Invalid CF name",
+          "InvalidLogIndex { expected: u64, got: u64 } - Log gap detected",
+          "SnapshotFailed { path: PathBuf, reason: String } - Checkpoint creation failed",
+          "CorruptedData { cf: String, key: Vec<u8>, reason: String } - Data validation failed",
+          "VersionMismatch { expected: u8, got: u8 } - Schema version incompatibility"
+        ],
+        "propagation_strategy": "Use Result<T, StorageError> throughout; convert from underlying errors with #[from]",
+        "context_preservation": "Each variant includes enough context to debug without source code access"
+      }
+    },
+    "persistence_design": {
+      "rocksdb_configuration": {
+        "write_ahead_log": {
+          "enabled": true,
+          "sync_mode": "Per-write sync for *_raft_state CFs, async for others",
+          "purpose": "Durability guarantee for Raft hard state updates"
+        },
+        "memtable_settings": {
+          "write_buffer_size": "64MB per CF",
+          "max_write_buffer_number": 3,
+          "rationale": "Balance memory usage vs write amplification; 64MB * 3 * 6 CFs = ~1.1GB max memory"
+        },
+        "compaction_settings": {
+          "style": "Level compaction for all CFs (better space efficiency than universal)",
+          "level0_trigger": "4 files (triggers L0->L1 compaction)",
+          "target_file_size": "64MB SST files",
+          "max_bytes_for_level_base": "256MB (L1 size)",
+          "rationale": "Standard tiered compaction; optimize for read performance over write throughput"
+        },
+        "compression": {
+          "type": "Lz4 (fast decompression, good ratio)",
+          "per_level": "None for L0/L1 (hot data), Lz4 for L2+",
+          "rationale": "Balance CPU usage vs disk space; Raft logs compress well"
+        },
+        "bloom_filters": {
+          "enabled": "Only for data_kv CF",
+          "bits_per_key": 10,
+          "purpose": "Reduce disk reads for GET operations; not needed for sequential Raft log access"
+        },
+        "block_cache": {
+          "shared": true,
+          "size": "256MB shared across all CFs",
+          "purpose": "Cache frequently accessed blocks; let OS page cache handle rest"
+        }
+      },
+      "column_family_setup": {
+        "initialization": "Open DB with all 6 CFs; fail-fast if any CF missing (prevents data loss)",
+        "creation": "Create all CFs atomically on first startup (bootstrap mode)",
+        "options_per_cf": {
+          "system_raft_log": {
+            "optimize_for": "Sequential writes and range scans",
+            "prefix_extractor": "None (access is by exact log:{index} lookup or range scan)",
+            "compaction": "Level style, aggressive (keep log size small)"
+          },
+          "system_raft_state": {
+            "optimize_for": "Single-key updates with fsync",
+            "size": "Always <1KB (single hard state entry)",
+            "compaction": "Disabled (too small to matter)"
+          },
+          "system_data": {
+            "optimize_for": "Small number of keys (<10), infrequent updates",
+            "compaction": "Disabled (bounded size ~100KB)"
+          },
+          "data_raft_log": {
+            "optimize_for": "High-throughput sequential writes and range scans",
+            "prefix_extractor": "None",
+            "compaction": "Level style, moderate (balance log size vs compaction cost)"
+          },
+          "data_raft_state": {
+            "optimize_for": "Single-key updates with fsync",
+            "size": "Always <1KB",
+            "compaction": "Disabled"
+          },
+          "data_kv": {
+            "optimize_for": "Random reads and writes, high key count",
+            "prefix_extractor": "4-byte hash prefix for bloom filters",
+            "bloom_filter": "Enabled (10 bits per key)",
+            "compaction": "Level style, standard settings"
+          }
+        }
+      },
+      "serialization_strategy": {
+        "format": "bincode for all Rust structs",
+        "rationale": "Faster than JSON, more compact than protobuf for Rust-to-Rust, no schema required",
+        "version_handling": "All structs have `version: u8` as first field; checked on deserialization",
+        "migration_path": "If version < CURRENT_VERSION, run migration; if version > CURRENT_VERSION, refuse to start",
+        "key_formats": {
+          "system_raft_log": "String keys: 'log:{index}' (e.g., 'log:142')",
+          "system_raft_state": "String key: 'state' (single entry)",
+          "system_data": "String keys: 'membership', 'shardmap'",
+          "data_raft_log": "String keys: 'log:{index}'",
+          "data_raft_state": "String key: 'state'",
+          "data_kv": "Raw byte keys (user-provided, no encoding)"
+        },
+        "value_formats": {
+          "raft_log": "bincode::serialize(&VersionedLogEntry)",
+          "raft_state": "bincode::serialize(&RaftHardState)",
+          "system_data": "bincode::serialize(&ClusterMembership | &ShardMap)",
+          "data_kv": "bincode::serialize(&StoredValue)"
+        }
+      },
+      "durability_strategy": {
+        "fsync_policy": {
+          "raft_state_cfs": "Synchronous fsync before returning from put() - critical for Raft safety",
+          "other_cfs": "Async WAL writes - rely on WAL for durability, fsync happens in background",
+          "batch_writes": "If batch touches any raft_state CF, fsync entire batch"
+        },
+        "wal_configuration": {
+          "enabled": true,
+          "sync_mode": "Per-write for state CFs, batch for others",
+          "wal_dir": "Same as data_dir (simplify Phase 1; can separate in Phase 4 for performance)",
+          "wal_size_limit": "64MB (triggers rotation)"
+        },
+        "crash_recovery": "RocksDB handles replay from WAL automatically; our code just opens DB and validates schema versions",
+        "checkpoint_atomicity": "RocksDB checkpoint creates hard links atomically; either full checkpoint exists or none"
+      }
+    },
+    "api_surface": {
+      "crud_operations": [
+        {
+          "method": "get(cf: ColumnFamily, key: &[u8]) -> Result<Option<Vec<u8>>>",
+          "purpose": "Point read from column family",
+          "behavior": "Returns None if key doesn't exist; Some(value) if found",
+          "error_cases": "RocksDb error, Io error",
+          "performance": "O(log n) with bloom filter optimization for data_kv"
+        },
+        {
+          "method": "put(cf: ColumnFamily, key: &[u8], value: &[u8]) -> Result<()>",
+          "purpose": "Write key-value pair to column family",
+          "behavior": "Overwrites if key exists; creates if new; fsync if CF requires it",
+          "error_cases": "RocksDb error, Io error",
+          "performance": "O(1) amortized; may trigger compaction"
+        },
+        {
+          "method": "delete(cf: ColumnFamily, key: &[u8]) -> Result<()>",
+          "purpose": "Remove key from column family",
+          "behavior": "No-op if key doesn't exist; fsync if CF requires it",
+          "error_cases": "RocksDb error, Io error",
+          "performance": "O(1) amortized; tombstone written to LSM tree"
+        },
+        {
+          "method": "exists(cf: ColumnFamily, key: &[u8]) -> Result<bool>",
+          "purpose": "Check key existence without reading value",
+          "behavior": "Returns true if key exists, false otherwise",
+          "error_cases": "RocksDb error, Io error",
+          "performance": "O(log n); faster than get() since value not returned"
+        }
+      ],
+      "raft_log_operations": [
+        {
+          "method": "append_log_entry(cf: ColumnFamily, index: u64, entry: &[u8]) -> Result<()>",
+          "purpose": "Optimized append to Raft log",
+          "behavior": "Write entry with key 'log:{index}'; validates no gaps in log indices",
+          "error_cases": "InvalidLogIndex if gap detected, RocksDb error",
+          "performance": "O(1) amortized; sequential write pattern"
+        },
+        {
+          "method": "get_log_range(cf: ColumnFamily, start: u64, end: u64) -> Result<Vec<Vec<u8>>>",
+          "purpose": "Batch read of log entries for replication",
+          "behavior": "Returns entries [start, end) in order; empty vec if none found",
+          "error_cases": "RocksDb error, Serialization error",
+          "performance": "O(m) where m = (end - start); sequential scan with iterator"
+        },
+        {
+          "method": "truncate_log_before(cf: ColumnFamily, index: u64) -> Result<()>",
+          "purpose": "Delete log entries before index (for compaction)",
+          "behavior": "Batch delete all entries with log_index < index",
+          "error_cases": "RocksDb error",
+          "performance": "O(k) where k = number of entries deleted; uses WriteBatch for atomicity"
+        },
+        {
+          "method": "get_last_log_index(cf: ColumnFamily) -> Result<Option<u64>>",
+          "purpose": "Find highest log index without scanning entire log",
+          "behavior": "Seek to end of CF, read last key, parse index",
+          "error_cases": "RocksDb error, parse error if log corrupted",
+          "performance": "O(1) with reverse iterator"
+        }
+      ],
+      "snapshot_operations": [
+        {
+          "method": "create_snapshot(path: &Path) -> Result<SnapshotMetadata>",
+          "purpose": "Create atomic checkpoint for log compaction",
+          "behavior": "RocksDB checkpoint to path; return metadata with timestamp, size, last_index",
+          "error_cases": "SnapshotFailed if checkpoint fails, Io error",
+          "performance": "O(1) - uses hard links, no data copying; ~10ms for Phase 1 dataset",
+          "atomicity": "All CFs snapshotted atomically at same point-in-time"
+        },
+        {
+          "method": "restore_snapshot(path: &Path) -> Result<()>",
+          "purpose": "Restore DB from checkpoint (for new nodes joining cluster)",
+          "behavior": "Close current DB, copy checkpoint files to data_dir, reopen DB",
+          "error_cases": "Io error, RocksDb error, VersionMismatch if snapshot too new",
+          "performance": "O(n) where n = snapshot size; requires full data copy",
+          "validation": "Check all CF schema versions before accepting snapshot"
+        },
+        {
+          "method": "validate_snapshot(path: &Path) -> Result<SnapshotMetadata>",
+          "purpose": "Pre-validate snapshot before restore (avoid partial restore failures)",
+          "behavior": "Open snapshot read-only, check versions, extract metadata, close",
+          "error_cases": "SnapshotFailed, VersionMismatch, CorruptedData",
+          "performance": "O(1) - only reads metadata, not full data scan"
+        }
+      ],
+      "batch_operations": [
+        {
+          "method": "batch_write(batch: WriteBatch) -> Result<()>",
+          "purpose": "Atomic multi-CF write operation",
+          "behavior": "All operations succeed or all fail; fsync if any CF requires it",
+          "error_cases": "RocksDb error, Io error",
+          "performance": "O(k) where k = number of operations in batch; amortizes fsync cost",
+          "atomicity": "ACID atomic - no partial writes visible to readers"
+        }
+      ],
+      "utility_operations": [
+        {
+          "method": "iterator(cf: ColumnFamily, mode: IteratorMode) -> Result<StorageIterator>",
+          "purpose": "Create iterator for range queries",
+          "behavior": "Return iterator positioned per mode; sees snapshot-isolated view",
+          "error_cases": "RocksDb error",
+          "performance": "O(1) to create; O(k) to scan k entries",
+          "snapshot_guarantee": "Iterator sees consistent view even if writes happen during scan"
+        },
+        {
+          "method": "metrics(&self) -> StorageMetrics",
+          "purpose": "Get current storage metrics for monitoring",
+          "behavior": "Return snapshot of metrics; refresh from RocksDB internal stats",
+          "error_cases": "None - returns default if stats unavailable",
+          "performance": "O(1) - reads cached values"
+        },
+        {
+          "method": "sync(&self) -> Result<()>",
+          "purpose": "Force fsync of WAL (for testing and manual durability)",
+          "behavior": "Block until all pending writes are durable",
+          "error_cases": "Io error",
+          "performance": "O(1) but blocks until fsync completes (~1-5ms on SSD)"
+        },
+        {
+          "method": "compact_range(cf: ColumnFamily, start: Option<&[u8]>, end: Option<&[u8]>) -> Result<()>",
+          "purpose": "Manual compaction trigger (for testing and maintenance)",
+          "behavior": "Force compaction of key range in CF; blocks until complete",
+          "error_cases": "RocksDb error",
+          "performance": "O(n) where n = range size; expensive, use sparingly"
+        },
+        {
+          "method": "close(self) -> Result<()>",
+          "purpose": "Graceful shutdown of storage",
+          "behavior": "Flush memtables, close DB, release file handles",
+          "error_cases": "Io error",
+          "performance": "O(1) - RocksDB handles internal cleanup"
+        }
+      ]
+    },
+    "error_handling": {
+      "error_types": [
+        "RocksDb - Wrapper for rocksdb::Error (disk full, corruption, etc.)",
+        "Io - File system errors during snapshot operations",
+        "Serialization - bincode errors when deserializing persisted structs",
+        "ColumnFamilyNotFound - Attempt to access non-existent CF (programming error)",
+        "InvalidLogIndex - Log gap detected (Raft safety violation)",
+        "SnapshotFailed - Checkpoint creation/restoration failed",
+        "CorruptedData - Schema version mismatch or invalid data format",
+        "VersionMismatch - Attempted to load newer schema version than supported"
+      ],
+      "propagation_strategy": "Use Result<T, StorageError> for all fallible operations; no panics except for programming errors (e.g., invalid CF enum)",
+      "context_preservation": "Each error variant includes context (CF name, key, expected vs actual values) for debugging; use thiserror #[error] for formatting",
+      "recovery_strategy": {
+        "RocksDb": "Propagate to caller (raft crate decides whether to retry, fail, or panic)",
+        "Io": "Propagate to caller (likely requires node restart)",
+        "Serialization": "Fail-fast - indicates data corruption or version mismatch",
+        "ColumnFamilyNotFound": "Panic - programming error, not runtime error",
+        "InvalidLogIndex": "Propagate to raft crate - indicates need for snapshot from leader",
+        "SnapshotFailed": "Propagate to caller - may retry or request from different node",
+        "CorruptedData": "Fail-fast - cannot continue with corrupted data",
+        "VersionMismatch": "Fail-fast on startup - requires upgrade"
+      },
+      "logging_strategy": "Use tracing::{error, warn, debug} for internal events; caller logs errors returned from API"
+    },
+    "performance_design": {
+      "latency_optimization": [
+        "Target: <1ms p99 for get/put operations",
+        "Bloom filters on data_kv CF reduce unnecessary disk reads",
+        "Shared block cache (256MB) reduces read latency for hot keys",
+        "Write buffer (64MB per CF) batches writes before flushing to disk",
+        "Fsync only for raft_state CFs - most writes are async",
+        "Direct access to RocksDB (no additional serialization layers)",
+        "Use &[u8] throughout API to avoid unnecessary copies"
+      ],
+      "batch_strategy": {
+        "motivation": "Amortize fsync cost across multiple operations",
+        "implementation": "WriteBatch accumulates puts/deletes, single fsync at commit",
+        "use_cases": [
+          "Raft log replication: batch multiple log entries",
+          "State machine application: batch user KV writes + Raft state update",
+          "Log compaction: batch truncation of old log entries"
+        ],
+        "size_limits": "No hard limit in Phase 1; consider 10MB batches to avoid memory spikes in Phase 2+",
+        "atomicity_guarantee": "RocksDB WriteBatch ensures all-or-nothing semantics"
+      },
+      "iterator_implementation": {
+        "snapshot_isolation": "Iterator captures DB snapshot at creation; sees consistent view",
+        "direction_support": "Forward and backward iteration via next()/prev()",
+        "seek_operations": "seek(), seek_to_first(), seek_to_last() for positioning",
+        "memory_usage": "Iterator holds reference to snapshot; bounded by RocksDB internal buffers",
+        "cleanup": "Iterator automatically released on drop; snapshot freed",
+        "use_cases": [
+          "Log range scan: iterate log:{start} to log:{end}",
+          "Full KV scan: iterate entire data_kv CF (for snapshots)",
+          "Prefix scan: seek to key prefix, iterate while matches"
+        ]
+      },
+      "snapshot_efficiency": {
+        "checkpoint_mechanism": "RocksDB checkpoint uses hard links (no data copy)",
+        "creation_time": "O(1) - typically <10ms for datasets up to 10GB",
+        "disk_space": "Zero additional space initially; diverges as original DB changes",
+        "restoration_time": "O(n) - must copy all files to data_dir; ~1-2s per GB",
+        "validation": "Schema version check on restore to detect incompatible snapshots",
+        "concurrency": "Checkpoint creation doesn't block reads/writes",
+        "cleanup": "Old checkpoints must be manually deleted (defer to raft crate to manage lifecycle)"
+      },
+      "memory_considerations": {
+        "write_buffers": "64MB * 3 buffers * 6 CFs = ~1.1GB max memtable memory",
+        "block_cache": "256MB shared across all CFs",
+        "iterator_snapshots": "Bounded by number of active iterators * block cache overhead",
+        "total_estimate": "~1.5GB memory for storage layer in steady state",
+        "backpressure": "RocksDB stalls writes if memtables full (prevents OOM)"
+      },
+      "disk_io_patterns": {
+        "raft_log": "Sequential writes, occasional sequential reads (for replication)",
+        "raft_state": "Random writes with fsync, infrequent reads (on restart)",
+        "data_kv": "Random reads and writes, high IOPS workload",
+        "compaction": "Background sequential reads + writes, throttled to avoid impacting foreground",
+        "wal": "Sequential writes, flushed per-write for state CFs"
+      }
+    },
+    "integration_points": {
+      "raft_crate_usage": [
+        "RaftStorage struct (in raft crate) will own Storage instance",
+        "Implements raft::Storage trait by delegating to our Storage methods",
+        "Handles log entry serialization/deserialization (VersionedLogEntry -> bytes)",
+        "Maps Raft operations to appropriate column families",
+        "Enforces Raft invariants (no log gaps, hard state always persisted)"
+      ],
+      "common_crate_dependencies": [
+        "Import error types from common::errors (if we define base error types there)",
+        "Use data structure definitions: VersionedLogEntry, RaftHardState, etc.",
+        "Share StorageMetrics type if used by multiple crates",
+        "Constants: CURRENT_VERSION, column family names"
+      ],
+      "phase_2_extensions": [
+        "Add ColumnFamily::ShardRaftLog(shard_id) and ShardRaftState(shard_id) variants",
+        "Dynamic CF creation for new shards (may require DB restart in Phase 2)",
+        "Per-shard metrics tracking",
+        "Shard-specific compaction policies"
+      ]
+    }
+  },
+  "design": {
+    "component_architecture": {
+      "pattern": "Storage Abstraction Layer (NOT Router → Service → Repository - this is persistence only)",
+      "module_structure": [
+        "lib.rs - Public API, Storage struct, re-exports",
+        "column_family.rs - ColumnFamily enum with CF metadata",
+        "batch.rs - WriteBatch builder for atomic operations",
+        "iterator.rs - StorageIterator with snapshot isolation",
+        "error.rs - StorageError with thiserror",
+        "metrics.rs - StorageMetrics tracking",
+        "snapshot.rs - Checkpoint creation/restoration",
+        "options.rs - StorageOptions and CFOptions configuration"
+      ],
+      "component_interaction": {
+        "Storage": "Central hub - owns Arc<DB>, manages CF handles, provides all operations",
+        "WriteBatch": "Helper - builds atomic multi-CF writes, used by Storage.batch_write()",
+        "StorageIterator": "Helper - wraps RocksDB iterator with snapshot isolation",
+        "ColumnFamily": "Type-safe enum - prevents CF name typos at compile time",
+        "StorageMetrics": "Read-only view - exposed via Storage.metrics()",
+        "StorageOptions": "Initialization config - consumed by Storage::new()"
+      },
+      "dependencies": {
+        "internal": "Storage owns all other components (WriteBatch, Iterator created on-demand)",
+        "external": "RocksDB (via Arc<DB>), bincode (serialization), common crate (data types)"
+      }
+    },
+    "implementation_design": {
+      "storage_struct": {
+        "definition": "pub struct Storage { db: Arc<DB>, cf_handles: HashMap<ColumnFamily, Arc<BoundColumnFamily>>, metrics: Arc<RwLock<StorageMetrics>>, config: StorageOptions }",
+        "key_methods": [
+          "new(options: StorageOptions) -> Result<Self> - Open or create RocksDB with all 6 CFs",
+          "get(&self, cf: ColumnFamily, key: &[u8]) -> Result<Option<Vec<u8>>>",
+          "put(&self, cf: ColumnFamily, key: &[u8], value: &[u8]) -> Result<()>",
+          "batch_write(&self, batch: WriteBatch) -> Result<()>",
+          "create_snapshot(&self, path: &Path) -> Result<SnapshotMetadata>"
+        ],
+        "concurrency": "Arc<DB> enables safe sharing across threads; RocksDB handles internal locking",
+        "lifecycle": "Created once at node startup, shared across Raft groups, closed at shutdown"
+      },
+      "write_batch_impl": {
+        "definition": "pub struct WriteBatch { inner: rocksdb::WriteBatch, cfs: Vec<ColumnFamily> }",
+        "builder_pattern": "new() -> put() -> put() -> delete() -> requires_fsync() -> storage.batch_write(batch)",
+        "atomicity": "RocksDB WriteBatch guarantees all operations commit together or none",
+        "fsync_decision": "requires_fsync() returns true if any CF in cfs Vec requires fsync"
+      },
+      "iterator_impl": {
+        "definition": "pub struct StorageIterator<'a> { inner: DBIterator<'a>, cf: ColumnFamily }",
+        "snapshot_isolation": "Iterator created with DB snapshot - sees consistent view",
+        "methods": "next(), prev(), seek(), seek_to_first(), seek_to_last(), valid()",
+        "cleanup": "Snapshot automatically released on Iterator drop"
+      },
+      "error_handling_flow": {
+        "result_type": "pub type Result<T> = std::result::Result<T, StorageError>",
+        "error_conversion": "Use #[from] to auto-convert rocksdb::Error, std::io::Error, bincode::Error",
+        "context_addition": "Wrap errors with .map_err() to add CF name, key, operation context",
+        "propagation": "All public methods return Result<T>; caller decides retry/fail/panic"
+      }
+    },
+    "data_flows": {
+      "get_operation": [
+        "1. Client: storage.get(ColumnFamily::DataKv, b\"foo\")",
+        "2. Storage: Look up CF handle from cf_handles HashMap",
+        "3. Storage: db.get_cf(cf_handle, b\"foo\") -> Result<Option<Vec<u8>>>",
+        "4. Storage: Update metrics.read_ops_total += 1",
+        "5. Storage: Return Ok(Some(value)) or Ok(None)"
+      ],
+      "put_operation": [
+        "1. Client: storage.put(ColumnFamily::DataRaftState, b\"state\", bytes)",
+        "2. Storage: Check cf.requires_fsync() -> true for raft_state CFs",
+        "3. Storage: Create WriteOptions with sync=true",
+        "4. Storage: db.put_cf_opt(cf_handle, b\"state\", bytes, write_opts)",
+        "5. RocksDB: Append to WAL, fsync WAL to disk (blocks ~1-5ms)",
+        "6. RocksDB: Insert into memtable",
+        "7. Storage: Update metrics.write_ops_total += 1",
+        "8. Storage: Return Ok(())"
+      ],
+      "batch_write_operation": [
+        "1. Client: let mut batch = WriteBatch::new()",
+        "2. Client: batch.put(ColumnFamily::DataKv, b\"key1\", b\"val1\")",
+        "3. Client: batch.put(ColumnFamily::DataRaftState, b\"state\", bytes)",
+        "4. Client: storage.batch_write(batch)",
+        "5. Storage: Check batch.requires_fsync() -> true (DataRaftState touched)",
+        "6. Storage: Create WriteOptions with sync=true",
+        "7. Storage: db.write_opt(batch.inner, write_opts)",
+        "8. RocksDB: Apply all operations atomically, fsync WAL",
+        "9. Storage: Update metrics",
+        "10. Storage: Return Ok(())"
+      ],
+      "snapshot_creation": [
+        "1. Client: storage.create_snapshot(Path::new(\"/data/snapshots/snap-20250125\"))",
+        "2. Storage: Create Checkpoint object from db",
+        "3. Storage: checkpoint.create_checkpoint(path)?",
+        "4. RocksDB: Create hard links to all SST files atomically (~10ms)",
+        "5. Storage: Read db.latest_sequence_number() for metadata",
+        "6. Storage: Stat checkpoint directory for size_bytes",
+        "7. Storage: Create SnapshotMetadata { last_included_index, last_included_term, created_at, size_bytes }",
+        "8. Storage: Update metrics.last_snapshot_duration_ms",
+        "9. Storage: Return Ok(metadata)"
+      ],
+      "raft_integration_flow": [
+        "1. Raft crate: RaftStorage owns Storage instance",
+        "2. raft-rs calls: storage_trait.append(entries)",
+        "3. RaftStorage: Serialize entries to VersionedLogEntry",
+        "4. RaftStorage: Call storage.append_log_entry(ColumnFamily::DataRaftLog, index, bytes)",
+        "5. Storage: Validate no gaps in log indices",
+        "6. Storage: db.put_cf(data_raft_log, b\"log:{index}\", bytes)",
+        "7. Storage: Return Ok(())",
+        "8. RaftStorage: Return success to raft-rs"
+      ]
+    },
+    "module_organization": {
+      "source_files": {
+        "lib.rs": "Public API surface, Storage struct impl, re-exports (Storage, ColumnFamily, WriteBatch, etc.)",
+        "column_family.rs": "ColumnFamily enum, as_str(), requires_fsync(), default_options(), all() methods",
+        "batch.rs": "WriteBatch builder with put/delete/clear/is_empty/requires_fsync",
+        "iterator.rs": "StorageIterator wrapper with next/prev/seek methods, IteratorMode enum",
+        "error.rs": "StorageError enum with thiserror derives, Result type alias",
+        "metrics.rs": "StorageMetrics struct with new() and update_from_db() methods",
+        "snapshot.rs": "Helper functions for checkpoint creation/restoration/validation",
+        "options.rs": "StorageOptions and CFOptions configuration structs with builders"
+      },
+      "public_api": [
+        "Storage - Main struct with all public methods",
+        "ColumnFamily - Enum of 6 CFs",
+        "WriteBatch - Builder for atomic writes",
+        "StorageIterator - Iterator wrapper",
+        "IteratorMode - Iterator positioning enum",
+        "StorageOptions, CFOptions - Configuration",
+        "StorageMetrics - Metrics snapshot",
+        "StorageError - Error type",
+        "Result<T> - Type alias for Result<T, StorageError>"
+      ],
+      "internal_helpers": [
+        "CF handle caching in HashMap (private field)",
+        "RocksDB initialization logic in Storage::new()",
+        "WriteOptions creation based on fsync requirements",
+        "Metrics update helper methods",
+        "Key formatting helpers (e.g., format_log_key(index) -> String)"
+      ],
+      "test_structure": {
+        "unit_tests": "Each module has #[cfg(test)] mod tests { ... } for internal functions",
+        "integration_tests": "tests/integration_tests.rs - Full Storage workflows with temporary RocksDB",
+        "test_helpers": "tests/common/mod.rs - Shared test utilities (temp dir, sample data generation)",
+        "property_tests": "tests/property_tests.rs - proptest for serialization roundtrip, batch atomicity"
+      }
+    },
+    "integration_design": {
+      "raft_crate_interface": {
+        "wrapper_struct": "RaftStorage { storage: Storage, shard_id: u64 }",
+        "trait_implementation": "impl raft::Storage for RaftStorage",
+        "method_mapping": {
+          "raft::Storage::append": "storage.append_log_entry() with serialization",
+          "raft::Storage::entries": "storage.get_log_range() with deserialization",
+          "raft::Storage::snapshot": "storage.create_snapshot() + metadata",
+          "raft::Storage::hard_state": "storage.get() on DataRaftState CF"
+        },
+        "serialization_responsibility": "RaftStorage handles Entry <-> VersionedLogEntry conversion; Storage only sees bytes",
+        "cf_selection": "RaftStorage selects appropriate CF (SystemRaftLog vs DataRaftLog) based on context"
+      },
+      "common_crate_dependencies": {
+        "data_structures": [
+          "VersionedLogEntry - Defined in common, serialized by raft crate, stored as bytes by storage crate",
+          "RaftHardState - Defined in common, serialized by raft crate",
+          "StoredValue - Defined in common, serialized by kv crate",
+          "ClusterMembership, ShardMap - Defined in common, serialized by seshat binary"
+        ],
+        "error_types": "If common defines base Error enum, storage::StorageError could wrap it; otherwise independent",
+        "constants": "CURRENT_VERSION, CF names as constants if needed for validation",
+        "type_aliases": "NodeId, Term, LogIndex used for documentation but storage sees u64"
+      },
+      "data_structure_placement": {
+        "storage_crate": [
+          "Storage, WriteBatch, StorageIterator - Storage abstraction types",
+          "ColumnFamily, IteratorMode - Storage-specific enums",
+          "StorageOptions, CFOptions - Configuration types",
+          "StorageMetrics - Metrics type",
+          "StorageError - Storage-specific errors"
+        ],
+        "common_crate": [
+          "VersionedLogEntry, RaftHardState - Raft consensus data",
+          "StoredValue - User KV data wrapper",
+          "ClusterMembership, ShardMap - Cluster metadata",
+          "NodeInfo, ShardInfo - Supporting types",
+          "SnapshotMetadata - Shared between storage and raft"
+        ],
+        "rationale": "Storage crate is pure persistence abstraction; common crate holds domain data structures shared across crates"
+      }
+    }
+  }
+}

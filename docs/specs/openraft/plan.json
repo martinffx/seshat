@@ -1,0 +1,949 @@
+{
+  "feature": "openraft-migration",
+  "description": "Migration from raft-rs to openraft library",
+  "type": "library_migration",
+  "estimated_effort_hours": "15-21",
+  "total_tasks": 24,
+  "total_phases": 6,
+
+  "phases": {
+    "type_system": {
+      "name": "Type System & Configuration",
+      "description": "Define openraft type configuration and conversion utilities",
+      "order": 1,
+      "dependencies": [],
+      "estimated_hours": "2-3",
+      "tasks": ["define_type_config", "create_conversions", "test_conversions"],
+      "files_affected": [
+        "crates/raft/src/types.rs",
+        "crates/raft/Cargo.toml"
+      ],
+      "success_criteria": [
+        "RaftTypeConfig compiles with all required associated types",
+        "Conversion functions for Entry, HardState, ConfState work correctly",
+        "Property tests verify round-trip conversions"
+      ]
+    },
+
+    "storage_layer": {
+      "name": "Storage Layer Migration",
+      "description": "Adapt MemStorage to openraft storage traits",
+      "order": 2,
+      "dependencies": ["type_system"],
+      "estimated_hours": "4-5",
+      "tasks": [
+        "implement_log_reader",
+        "implement_snapshot_builder",
+        "implement_storage_trait",
+        "migrate_storage_tests"
+      ],
+      "files_affected": [
+        "crates/storage/src/openraft_storage.rs",
+        "crates/storage/src/lib.rs",
+        "crates/storage/Cargo.toml"
+      ],
+      "success_criteria": [
+        "RaftLogReader trait fully implemented",
+        "RaftSnapshotBuilder creates snapshots correctly",
+        "RaftStorage trait handles all mutations",
+        "85+ storage tests migrated and passing"
+      ]
+    },
+
+    "state_machine": {
+      "name": "State Machine Integration",
+      "description": "Wrap existing StateMachine with openraft trait",
+      "order": 3,
+      "dependencies": ["type_system"],
+      "estimated_hours": "2-3",
+      "tasks": [
+        "create_wrapper",
+        "implement_apply",
+        "implement_snapshot",
+        "test_idempotency"
+      ],
+      "files_affected": [
+        "crates/raft/src/state_machine_wrapper.rs",
+        "crates/raft/src/state_machine.rs"
+      ],
+      "success_criteria": [
+        "OpenRaftStateMachine wrapper delegates correctly",
+        "apply() preserves idempotency checks (index > last_applied)",
+        "Snapshot creation/restoration works with bincode",
+        "All idempotency tests pass"
+      ]
+    },
+
+    "network_stub": {
+      "name": "Network Stub Implementation",
+      "description": "Create minimal RaftNetwork implementation for testing",
+      "order": 4,
+      "dependencies": ["type_system"],
+      "estimated_hours": "1-2",
+      "tasks": [
+        "define_stub_network",
+        "implement_send_methods",
+        "test_stub"
+      ],
+      "files_affected": [
+        "crates/raft/src/network_stub.rs"
+      ],
+      "success_criteria": [
+        "StubNetwork implements RaftNetwork trait",
+        "All send methods return Ok() with logging",
+        "Network instantiation tests pass"
+      ]
+    },
+
+    "node_migration": {
+      "name": "RaftNode Migration",
+      "description": "Migrate from raft::RawNode to openraft::Raft",
+      "order": 5,
+      "dependencies": ["storage_layer", "state_machine", "network_stub"],
+      "estimated_hours": "4-5",
+      "tasks": [
+        "update_dependencies",
+        "migrate_initialization",
+        "migrate_propose",
+        "migrate_api",
+        "migrate_node_tests"
+      ],
+      "files_affected": [
+        "crates/raft/src/node.rs",
+        "crates/raft/src/lib.rs",
+        "crates/raft/Cargo.toml"
+      ],
+      "success_criteria": [
+        "No prost version conflicts (cargo tree shows single prost 0.14)",
+        "RaftNode initializes with openraft::Raft",
+        "propose() works as async client_write()",
+        "is_leader(), leader_id() use openraft APIs",
+        "All node tests migrated and passing"
+      ]
+    },
+
+    "integration": {
+      "name": "Integration & Cleanup",
+      "description": "Final testing, verification, and code cleanup",
+      "order": 6,
+      "dependencies": ["node_migration"],
+      "estimated_hours": "2-3",
+      "tasks": [
+        "integration_tests",
+        "verify_prost_conflict_resolved",
+        "cleanup_old_code",
+        "update_docs"
+      ],
+      "files_affected": [
+        "crates/raft/tests/integration_tests.rs",
+        "crates/raft/README.md",
+        "crates/storage/README.md"
+      ],
+      "success_criteria": [
+        "End-to-end integration tests pass",
+        "cargo tree shows no prost conflicts",
+        "No raft-rs references remain in codebase",
+        "Documentation updated to reflect openraft"
+      ]
+    }
+  },
+
+  "tasks": {
+    "define_type_config": {
+      "id": "type_system_1",
+      "name": "Define RaftTypeConfig",
+      "phase": "type_system",
+      "order": 1,
+      "estimated_hours": "0.5-1",
+      "description": "Define RaftTypeConfig struct with all required associated types for openraft",
+      "files": ["crates/raft/src/types.rs"],
+      "dependencies": [],
+      "tdd_steps": [
+        "Write test for NodeId type (should be u64)",
+        "Write test for BasicNode struct construction",
+        "Write test for Request/Response types with serde",
+        "Implement RaftTypeConfig with all associated types",
+        "Verify compilation and type constraints"
+      ],
+      "acceptance_criteria": [
+        "RaftTypeConfig implements openraft::RaftTypeConfig",
+        "All associated types compile correctly",
+        "Type construction tests pass"
+      ],
+      "implementation_notes": [
+        "NodeId = u64 (matches existing raft-rs node IDs)",
+        "Node = BasicNode { addr: String }",
+        "Entry = LogEntry<Request>",
+        "SnapshotData = Vec<u8>",
+        "AsyncRuntime = TokioRuntime"
+      ]
+    },
+
+    "create_conversions": {
+      "id": "type_system_2",
+      "name": "Create Type Conversions",
+      "phase": "type_system",
+      "order": 2,
+      "estimated_hours": "1-1.5",
+      "description": "Create conversion functions between eraftpb and openraft types",
+      "files": ["crates/raft/src/types.rs"],
+      "dependencies": ["define_type_config"],
+      "tdd_steps": [
+        "Write test for eraftpb::Entry → LogEntry<Request> conversion",
+        "Write test for eraftpb::HardState → Vote + LogId conversion",
+        "Write test for eraftpb::ConfState → Membership conversion",
+        "Implement From/Into traits for all conversions",
+        "Test edge cases (empty voters, max term values)"
+      ],
+      "acceptance_criteria": [
+        "Entry conversion preserves index, term, data",
+        "HardState splits into Vote and commit index correctly",
+        "ConfState converts voters/learners to BTreeSet",
+        "All conversion tests pass"
+      ],
+      "implementation_notes": [
+        "Use LogEntry::new(log_id, Request { data })",
+        "Extract Vote { term, node_id } from HardState",
+        "Map ConfState.voters/learners to Membership"
+      ]
+    },
+
+    "test_conversions": {
+      "id": "type_system_3",
+      "name": "Property Test Conversions",
+      "phase": "type_system",
+      "order": 3,
+      "estimated_hours": "0.5-1",
+      "description": "Add property tests for round-trip type conversions",
+      "files": ["crates/raft/src/types.rs"],
+      "dependencies": ["create_conversions"],
+      "tdd_steps": [
+        "Add proptest dependency to Cargo.toml",
+        "Write property test for Entry round-trip (openraft → eraftpb → openraft)",
+        "Write property test for HardState/Vote round-trip",
+        "Write property test for ConfState/Membership round-trip",
+        "Verify no data loss in conversions"
+      ],
+      "acceptance_criteria": [
+        "Property tests pass for 1000+ random inputs",
+        "Round-trip conversions preserve all data",
+        "Edge cases handled (empty sets, u64::MAX)"
+      ],
+      "implementation_notes": [
+        "Use proptest for generating random valid types",
+        "Test boundary values (0, u64::MAX)",
+        "Verify no panics on malformed data"
+      ]
+    },
+
+    "implement_log_reader": {
+      "id": "storage_layer_1",
+      "name": "Implement RaftLogReader",
+      "phase": "storage_layer",
+      "order": 1,
+      "estimated_hours": "1.5-2",
+      "description": "Implement RaftLogReader trait for MemStorage to read log entries and vote state",
+      "files": ["crates/storage/src/openraft_storage.rs", "crates/storage/src/lib.rs"],
+      "dependencies": ["define_type_config"],
+      "tdd_steps": [
+        "Write test for get_log_state() returning last_purged and last_log_id",
+        "Write test for try_get_log_entries() with range queries",
+        "Write test for read_vote() returning current vote state",
+        "Implement OpenRaftMemStorage struct with RwLock fields",
+        "Implement RaftLogReader trait methods",
+        "Test concurrent read access"
+      ],
+      "acceptance_criteria": [
+        "get_log_state() returns correct LogState",
+        "try_get_log_entries() handles ranges correctly",
+        "read_vote() returns None initially, Some(vote) after save",
+        "Concurrent reads don't deadlock"
+      ],
+      "implementation_notes": [
+        "Use RwLock<BTreeMap<u64, LogEntry<Request>>> for log",
+        "Calculate log state from BTreeMap keys/values",
+        "Use RwLock<Option<Vote<u64>>> for vote storage"
+      ]
+    },
+
+    "implement_snapshot_builder": {
+      "id": "storage_layer_2",
+      "name": "Implement RaftSnapshotBuilder",
+      "phase": "storage_layer",
+      "order": 2,
+      "estimated_hours": "1-1.5",
+      "description": "Implement RaftSnapshotBuilder trait for creating snapshots",
+      "files": ["crates/storage/src/openraft_storage.rs"],
+      "dependencies": ["implement_log_reader"],
+      "tdd_steps": [
+        "Write test for build_snapshot() creating valid Snapshot",
+        "Write test verifying snapshot includes state machine data",
+        "Write test for snapshot metadata (last_log_id, membership)",
+        "Implement build_snapshot() delegating to StateMachine::snapshot()",
+        "Wrap result in openraft Snapshot type",
+        "Test snapshot data integrity with bincode"
+      ],
+      "acceptance_criteria": [
+        "build_snapshot() creates Snapshot with correct metadata",
+        "Snapshot data contains serialized state machine",
+        "Snapshot can be deserialized correctly",
+        "Multiple snapshots work correctly"
+      ],
+      "implementation_notes": [
+        "Call self.state_machine.read().unwrap().snapshot()",
+        "Create SnapshotMeta with last_log_id and membership",
+        "Store snapshot in RwLock<Option<Snapshot<RaftTypeConfig>>>"
+      ]
+    },
+
+    "implement_storage_trait": {
+      "id": "storage_layer_3",
+      "name": "Implement RaftStorage Trait",
+      "phase": "storage_layer",
+      "order": 3,
+      "estimated_hours": "2-2.5",
+      "description": "Implement main RaftStorage trait with all mutation methods",
+      "files": ["crates/storage/src/openraft_storage.rs"],
+      "dependencies": ["implement_snapshot_builder"],
+      "tdd_steps": [
+        "Write test for save_vote() persisting vote",
+        "Write test for append() adding entries to log",
+        "Write test for delete_conflict_logs_since() removing entries",
+        "Write test for purge_logs_upto() truncating old entries",
+        "Write test for apply_to_state_machine() applying entries",
+        "Write test for install_snapshot() restoring state",
+        "Implement all RaftStorage methods",
+        "Test atomicity of operations"
+      ],
+      "acceptance_criteria": [
+        "save_vote() persists vote correctly",
+        "append() maintains log order",
+        "delete_conflict_logs_since() removes correct range",
+        "purge_logs_upto() keeps required entries",
+        "apply_to_state_machine() preserves idempotency",
+        "install_snapshot() restores state correctly"
+      ],
+      "implementation_notes": [
+        "Maintain idempotency check: index > last_applied",
+        "Use BTreeMap::split_off for efficient range operations",
+        "Delegate state machine apply to StateMachine::apply()",
+        "Handle snapshot restoration via StateMachine::restore()"
+      ]
+    },
+
+    "migrate_storage_tests": {
+      "id": "storage_layer_4",
+      "name": "Migrate Storage Tests",
+      "phase": "storage_layer",
+      "order": 4,
+      "estimated_hours": "1-1.5",
+      "description": "Migrate existing 85+ MemStorage tests to openraft API",
+      "files": ["crates/storage/src/lib.rs"],
+      "dependencies": ["implement_storage_trait"],
+      "tdd_steps": [
+        "Convert all sync tests to async using #[tokio::test]",
+        "Update MemStorage API calls to OpenRaftMemStorage",
+        "Replace raft::Storage trait calls with openraft traits",
+        "Update assertions for openraft types",
+        "Verify all 85+ tests pass"
+      ],
+      "acceptance_criteria": [
+        "All storage tests converted to async",
+        "85+ tests passing with openraft",
+        "Test coverage maintained or improved",
+        "No flaky tests due to async timing"
+      ],
+      "implementation_notes": [
+        "Use tokio::test macro for async tests",
+        "Update test helpers to be async fn",
+        "Replace eraftpb types with openraft types",
+        "Keep test logic/assertions identical"
+      ]
+    },
+
+    "create_wrapper": {
+      "id": "state_machine_1",
+      "name": "Create StateMachine Wrapper",
+      "phase": "state_machine",
+      "order": 1,
+      "estimated_hours": "0.5-1",
+      "description": "Create OpenRaftStateMachine wrapper around existing StateMachine",
+      "files": ["crates/raft/src/state_machine_wrapper.rs"],
+      "dependencies": ["define_type_config"],
+      "tdd_steps": [
+        "Write test for OpenRaftStateMachine initialization",
+        "Write test for wrapper holding Arc<RwLock<StateMachine>>",
+        "Create OpenRaftStateMachine struct",
+        "Implement basic delegation methods",
+        "Test wrapper compiles and links correctly"
+      ],
+      "acceptance_criteria": [
+        "OpenRaftStateMachine wraps existing StateMachine",
+        "Wrapper uses Arc<RwLock<>> for thread safety",
+        "Initialization test passes",
+        "Compiles without errors"
+      ],
+      "implementation_notes": [
+        "Store inner: Arc<RwLock<StateMachine>>",
+        "Prepare for async RaftStateMachine trait impl",
+        "Keep existing StateMachine untouched"
+      ]
+    },
+
+    "implement_apply": {
+      "id": "state_machine_2",
+      "name": "Implement apply() with Idempotency",
+      "phase": "state_machine",
+      "order": 2,
+      "estimated_hours": "1-1.5",
+      "description": "Implement RaftStateMachine::apply() delegating to StateMachine with idempotency preservation",
+      "files": ["crates/raft/src/state_machine_wrapper.rs"],
+      "dependencies": ["create_wrapper"],
+      "tdd_steps": [
+        "Write test verifying apply() rejects entries with index <= last_applied",
+        "Write test for apply() accepting entries with index > last_applied",
+        "Write test for apply() processing multiple entries in order",
+        "Implement apply() iterating over entries and calling StateMachine::apply()",
+        "Verify idempotency check preserved (delegated to StateMachine)",
+        "Test response collection and error handling"
+      ],
+      "acceptance_criteria": [
+        "apply() preserves idempotency (index > last_applied)",
+        "Entries applied in order",
+        "Responses collected correctly",
+        "Out-of-order entries rejected",
+        "Duplicate entries rejected"
+      ],
+      "implementation_notes": [
+        "Iterate: for entry in entries { ... }",
+        "Call self.inner.write().unwrap().apply(entry.log_id.index, &entry.payload.data)",
+        "Idempotency check is inside StateMachine::apply()",
+        "Collect Response { result } for each entry"
+      ]
+    },
+
+    "implement_snapshot": {
+      "id": "state_machine_3",
+      "name": "Implement Snapshot Methods",
+      "phase": "state_machine",
+      "order": 3,
+      "estimated_hours": "0.5-1",
+      "description": "Implement snapshot creation and restoration for state machine",
+      "files": ["crates/raft/src/state_machine_wrapper.rs"],
+      "dependencies": ["implement_apply"],
+      "tdd_steps": [
+        "Write test for get_current_snapshot() creating snapshot",
+        "Write test for install_snapshot() restoring state",
+        "Write test for round-trip snapshot/restore",
+        "Implement snapshot creation via StateMachine::snapshot()",
+        "Implement snapshot restoration via StateMachine::restore()",
+        "Test with bincode serialization"
+      ],
+      "acceptance_criteria": [
+        "get_current_snapshot() creates valid snapshot",
+        "install_snapshot() restores state correctly",
+        "Round-trip preserves all state machine data",
+        "Bincode serialization works correctly"
+      ],
+      "implementation_notes": [
+        "snapshot() returns self.inner.read().unwrap().snapshot()",
+        "restore() calls self.inner.write().unwrap().restore(snapshot)",
+        "Use existing bincode serialization from StateMachine"
+      ]
+    },
+
+    "test_idempotency": {
+      "id": "state_machine_4",
+      "name": "Comprehensive Idempotency Tests",
+      "phase": "state_machine",
+      "order": 4,
+      "estimated_hours": "0.5-1",
+      "description": "Add comprehensive tests verifying idempotency guarantees",
+      "files": ["crates/raft/src/state_machine_wrapper.rs"],
+      "dependencies": ["implement_snapshot"],
+      "tdd_steps": [
+        "Write test applying same entry twice (should reject second)",
+        "Write test applying entries out of order (should reject)",
+        "Write test for gap in indices (should accept after gap)",
+        "Write test verifying last_applied tracking",
+        "Test idempotency after snapshot restoration"
+      ],
+      "acceptance_criteria": [
+        "Duplicate entries rejected",
+        "Out-of-order entries rejected",
+        "last_applied tracked correctly",
+        "Idempotency preserved after snapshot restore",
+        "All idempotency guarantees verified"
+      ],
+      "implementation_notes": [
+        "Test with sequential indices: 1, 2, 3",
+        "Test duplicate: 1, 2, 2 (reject third)",
+        "Test out-of-order: 1, 3, 2 (reject third)",
+        "Verify StateMachine::apply() logic enforces this"
+      ]
+    },
+
+    "define_stub_network": {
+      "id": "network_stub_1",
+      "name": "Define StubNetwork Struct",
+      "phase": "network_stub",
+      "order": 1,
+      "estimated_hours": "0.25-0.5",
+      "description": "Define StubNetwork struct for RaftNetwork trait implementation",
+      "files": ["crates/raft/src/network_stub.rs"],
+      "dependencies": ["define_type_config"],
+      "tdd_steps": [
+        "Write test for StubNetwork creation",
+        "Create StubNetwork struct with node_id field",
+        "Add new() constructor",
+        "Add basic tracing instrumentation"
+      ],
+      "acceptance_criteria": [
+        "StubNetwork compiles",
+        "new() constructor works",
+        "Basic logging in place"
+      ],
+      "implementation_notes": [
+        "Simple struct: { node_id: u64 }",
+        "Add tracing::info in new()",
+        "Prepare for async RaftNetwork trait"
+      ]
+    },
+
+    "implement_send_methods": {
+      "id": "network_stub_2",
+      "name": "Implement RaftNetwork Trait",
+      "phase": "network_stub",
+      "order": 2,
+      "estimated_hours": "0.5-1",
+      "description": "Implement RaftNetwork trait with no-op methods returning Ok",
+      "files": ["crates/raft/src/network_stub.rs"],
+      "dependencies": ["define_stub_network"],
+      "tdd_steps": [
+        "Write test for send_append_entries() returning Ok",
+        "Write test for send_vote() returning Ok",
+        "Write test for send_install_snapshot() returning Ok",
+        "Implement RaftNetwork trait with #[async_trait]",
+        "Add tracing to each method showing it's a stub",
+        "Return Ok(Default::default()) for all methods"
+      ],
+      "acceptance_criteria": [
+        "RaftNetwork trait implemented",
+        "All methods return Ok without panic",
+        "Tracing shows stub calls",
+        "Tests verify no-op behavior"
+      ],
+      "implementation_notes": [
+        "Use #[async_trait] for trait implementation",
+        "Log at debug level: tracing::debug!(\"StubNetwork: ...\")",
+        "Return Ok(AppendEntriesResponse::default()), etc.",
+        "Add TODO comments for future gRPC integration"
+      ]
+    },
+
+    "test_stub": {
+      "id": "network_stub_3",
+      "name": "Test Stub Network",
+      "phase": "network_stub",
+      "order": 3,
+      "estimated_hours": "0.25-0.5",
+      "description": "Test stub network behavior and tracing",
+      "files": ["crates/raft/src/network_stub.rs"],
+      "dependencies": ["implement_send_methods"],
+      "tdd_steps": [
+        "Write test verifying no panics on send calls",
+        "Write test checking tracing output (using tracing-subscriber-test)",
+        "Write test for concurrent send calls",
+        "Verify all network methods callable"
+      ],
+      "acceptance_criteria": [
+        "No panics on any send method",
+        "Tracing output verified",
+        "Concurrent calls work",
+        "All tests pass"
+      ],
+      "implementation_notes": [
+        "Use tokio::test for async tests",
+        "Verify Ok() responses",
+        "Check tracing with subscriber test utilities"
+      ]
+    },
+
+    "update_dependencies": {
+      "id": "node_migration_1",
+      "name": "Update Cargo Dependencies",
+      "phase": "node_migration",
+      "order": 1,
+      "estimated_hours": "0.5-1",
+      "description": "Update Cargo.toml to remove raft-rs and add openraft",
+      "files": ["crates/raft/Cargo.toml", "crates/storage/Cargo.toml"],
+      "dependencies": ["storage_layer", "state_machine", "network_stub"],
+      "tdd_steps": [
+        "Remove raft = \"0.7\" dependency",
+        "Remove prost-old dependency",
+        "Remove slog dependency",
+        "Add openraft = { version = \"0.10\", features = [\"tokio\"] }",
+        "Add async-trait = \"0.1\"",
+        "Add tracing = \"0.1\"",
+        "Run cargo tree | grep prost to verify conflict resolved",
+        "Run cargo build to verify compilation"
+      ],
+      "acceptance_criteria": [
+        "cargo tree shows single prost version (0.14)",
+        "No prost version conflicts",
+        "cargo build succeeds",
+        "All dependencies compatible"
+      ],
+      "implementation_notes": [
+        "Keep tokio, serde, bincode, tonic (0.14), prost (0.14)",
+        "Remove all raft-rs related dependencies",
+        "Verify openraft uses prost 0.14 (matching tonic 0.14)"
+      ]
+    },
+
+    "migrate_initialization": {
+      "id": "node_migration_2",
+      "name": "Migrate RaftNode Initialization",
+      "phase": "node_migration",
+      "order": 2,
+      "estimated_hours": "1-1.5",
+      "description": "Migrate RaftNode::new() to use openraft::Raft",
+      "files": ["crates/raft/src/node.rs"],
+      "dependencies": ["update_dependencies"],
+      "tdd_steps": [
+        "Write async test for RaftNode::new() initialization",
+        "Update RaftNode struct to hold openraft::Raft<RaftTypeConfig>",
+        "Create openraft Config with election/heartbeat timeouts",
+        "Implement async new() creating Raft instance",
+        "Test initialization with single node",
+        "Test initialization with multiple peers"
+      ],
+      "acceptance_criteria": [
+        "RaftNode::new() is async",
+        "Creates openraft::Raft instance successfully",
+        "Config parameters match existing values",
+        "Initialization tests pass"
+      ],
+      "implementation_notes": [
+        "Config { election_timeout_min: 150, election_timeout_max: 300, heartbeat_interval: 50 }",
+        "Use Raft::new(id, Arc::new(config), network, storage).await?",
+        "Store raft: Raft<RaftTypeConfig> in struct"
+      ]
+    },
+
+    "migrate_propose": {
+      "id": "node_migration_3",
+      "name": "Migrate propose() to client_write()",
+      "phase": "node_migration",
+      "order": 3,
+      "estimated_hours": "1-1.5",
+      "description": "Migrate propose() method to use openraft client_write()",
+      "files": ["crates/raft/src/node.rs"],
+      "dependencies": ["migrate_initialization"],
+      "tdd_steps": [
+        "Write async test for propose() submitting request",
+        "Write async test for propose() handling response",
+        "Update propose() to be async fn",
+        "Implement using raft.client_write(ClientWriteRequest::new(Request { data }))",
+        "Test successful proposal",
+        "Test proposal on non-leader (should fail or forward)"
+      ],
+      "acceptance_criteria": [
+        "propose() is async",
+        "Uses client_write() correctly",
+        "Returns result properly",
+        "Tests verify leader handling"
+      ],
+      "implementation_notes": [
+        "Signature: async fn propose(&self, data: Vec<u8>) -> Result<()>",
+        "Create request: ClientWriteRequest::new(Request { data })",
+        "Call: self.raft.client_write(request).await?",
+        "Handle ClientWriteResponse"
+      ]
+    },
+
+    "migrate_api": {
+      "id": "node_migration_4",
+      "name": "Migrate Remaining API Methods",
+      "phase": "node_migration",
+      "order": 4,
+      "estimated_hours": "1-1.5",
+      "description": "Migrate is_leader(), leader_id(), get() to openraft APIs",
+      "files": ["crates/raft/src/node.rs"],
+      "dependencies": ["migrate_propose"],
+      "tdd_steps": [
+        "Write async test for is_leader() using metrics()",
+        "Write async test for leader_id() using current_leader()",
+        "Write test for get() direct state machine access",
+        "Implement is_leader() via self.raft.is_leader().await",
+        "Implement leader_id() via self.raft.current_leader().await",
+        "Update get() to access storage.state_machine directly",
+        "Remove tick() and handle_ready() methods (no longer needed)"
+      ],
+      "acceptance_criteria": [
+        "is_leader() works correctly",
+        "leader_id() returns correct node ID or None",
+        "get() reads from state machine",
+        "tick() and handle_ready() removed",
+        "All API tests pass"
+      ],
+      "implementation_notes": [
+        "is_leader(): self.raft.is_leader().await",
+        "leader_id(): self.raft.current_leader().await",
+        "get(): self.storage.state_machine.read().unwrap().get(key)",
+        "Remove tick/handle_ready logic - openraft handles internally"
+      ]
+    },
+
+    "migrate_node_tests": {
+      "id": "node_migration_5",
+      "name": "Migrate RaftNode Tests",
+      "phase": "node_migration",
+      "order": 5,
+      "estimated_hours": "1-1.5",
+      "description": "Migrate existing RaftNode tests to async openraft API",
+      "files": ["crates/raft/src/node.rs"],
+      "dependencies": ["migrate_api"],
+      "tdd_steps": [
+        "Convert all node tests to async using #[tokio::test]",
+        "Remove tests for tick() and handle_ready()",
+        "Update propose tests to use client_write",
+        "Update leader election tests for openraft behavior",
+        "Fix any timing-related test issues",
+        "Verify all remaining tests pass"
+      ],
+      "acceptance_criteria": [
+        "All node tests converted to async",
+        "Obsolete tests removed (tick, handle_ready)",
+        "propose → client_write tests working",
+        "All tests pass consistently"
+      ],
+      "implementation_notes": [
+        "Use #[tokio::test] macro",
+        "Add .await to all async calls",
+        "Update test helpers to async fn",
+        "Remove synchronous tick/ready loop tests"
+      ]
+    },
+
+    "integration_tests": {
+      "id": "integration_1",
+      "name": "End-to-End Integration Tests",
+      "phase": "integration",
+      "order": 1,
+      "estimated_hours": "1-1.5",
+      "description": "Create comprehensive integration tests for full flow",
+      "files": ["crates/raft/tests/integration_tests.rs"],
+      "dependencies": ["migrate_node_tests"],
+      "tdd_steps": [
+        "Write test for full propose → apply → get flow",
+        "Write test for snapshot creation and restoration",
+        "Write test for idempotency end-to-end",
+        "Write test for multiple proposals in sequence",
+        "Test state machine consistency after operations",
+        "Test error handling paths"
+      ],
+      "acceptance_criteria": [
+        "Full flow tests pass",
+        "Snapshot round-trip works",
+        "Idempotency verified end-to-end",
+        "Error cases handled correctly",
+        "Integration tests stable and repeatable"
+      ],
+      "implementation_notes": [
+        "Create test helpers: setup_test_node(), propose_and_verify()",
+        "Test with realistic data patterns",
+        "Verify state machine state matches expectations",
+        "Test concurrent operations if possible"
+      ]
+    },
+
+    "verify_prost_conflict_resolved": {
+      "id": "integration_2",
+      "name": "Verify Prost Conflict Resolved",
+      "phase": "integration",
+      "order": 2,
+      "estimated_hours": "0.25-0.5",
+      "description": "Verify that prost version conflict is completely resolved",
+      "files": [],
+      "dependencies": ["integration_tests"],
+      "tdd_steps": [
+        "Run cargo tree | grep prost",
+        "Verify only prost 0.14 appears in tree",
+        "Check tonic compatibility (should use prost 0.14)",
+        "Verify openraft compatibility (should use prost 0.14)",
+        "Run cargo build --all-features to verify",
+        "Check for any warning about multiple prost versions"
+      ],
+      "acceptance_criteria": [
+        "cargo tree shows single prost version (0.14)",
+        "No version conflict warnings",
+        "All dependencies use same prost version",
+        "Clean build with no conflicts"
+      ],
+      "implementation_notes": [
+        "Document prost version in plan",
+        "Verify with: cargo tree | grep prost | sort | uniq",
+        "Check openraft's prost dependency matches tonic's"
+      ]
+    },
+
+    "cleanup_old_code": {
+      "id": "integration_3",
+      "name": "Remove raft-rs Code",
+      "phase": "integration",
+      "order": 3,
+      "estimated_hours": "0.5-1",
+      "description": "Remove all raft-rs specific code and references",
+      "files": ["crates/raft/src/", "crates/storage/src/"],
+      "dependencies": ["verify_prost_conflict_resolved"],
+      "tdd_steps": [
+        "Search codebase for 'use raft::' imports",
+        "Remove old raft::Storage trait implementation",
+        "Remove eraftpb imports and conversions (if any remain)",
+        "Remove slog-related code",
+        "Search for RawNode references",
+        "Remove any dead code from migration",
+        "Run cargo clippy to find unused imports"
+      ],
+      "acceptance_criteria": [
+        "No raft-rs references in code",
+        "No eraftpb imports",
+        "No slog imports",
+        "No unused imports or dead code",
+        "cargo clippy passes cleanly"
+      ],
+      "implementation_notes": [
+        "Search: rg 'use raft::' --type rust",
+        "Search: rg 'eraftpb' --type rust",
+        "Search: rg 'RawNode' --type rust",
+        "Remove old MemStorage raft::Storage impl if separate file"
+      ]
+    },
+
+    "update_docs": {
+      "id": "integration_4",
+      "name": "Update Documentation",
+      "phase": "integration",
+      "order": 4,
+      "estimated_hours": "0.5-1",
+      "description": "Update all documentation to reflect openraft migration",
+      "files": [
+        "crates/raft/README.md",
+        "crates/storage/README.md",
+        "docs/architecture/crates.md"
+      ],
+      "dependencies": ["cleanup_old_code"],
+      "tdd_steps": [
+        "Update crates/raft/README.md to mention openraft",
+        "Update crates/storage/README.md with OpenRaftMemStorage",
+        "Update module-level doc comments in lib.rs files",
+        "Update examples if any exist",
+        "Update docs/architecture/crates.md if needed",
+        "Remove references to raft-rs from comments"
+      ],
+      "acceptance_criteria": [
+        "All README files updated",
+        "Module docs mention openraft",
+        "No raft-rs references in docs",
+        "Examples (if any) work with openraft",
+        "Architecture docs reflect new structure"
+      ],
+      "implementation_notes": [
+        "Update dependency list in README",
+        "Update code examples to show async usage",
+        "Document breaking changes (async APIs)",
+        "Note prost conflict resolution"
+      ]
+    }
+  },
+
+  "dependency_graph": {
+    "description": "Task dependencies showing execution order",
+    "parallel_phases": {
+      "after_type_system": [
+        "storage_layer (tasks 4-7)",
+        "state_machine (tasks 8-11)",
+        "network_stub (tasks 12-14)"
+      ],
+      "note": "Storage, state machine, and network can be developed in parallel after type system is complete"
+    },
+    "critical_path": [
+      "type_system (tasks 1-3)",
+      "storage_layer (tasks 4-7)",
+      "node_migration (tasks 15-19)",
+      "integration (tasks 20-24)"
+    ]
+  },
+
+  "validation_checklist": {
+    "functional": [
+      "Single-node cluster starts successfully",
+      "Proposals accepted and applied via client_write()",
+      "State machine maintains consistency",
+      "Get operations return correct values",
+      "Leader election works automatically",
+      "85+ tests passing"
+    ],
+    "technical": [
+      "No prost version conflicts (cargo tree verified)",
+      "Clean compilation with zero warnings",
+      "All crates compile together",
+      "No runtime panics in tests",
+      "Async runtime stable (no deadlocks)"
+    ],
+    "migration_specific": [
+      "MemStorage remains in-memory only",
+      "No RocksDB dependencies added",
+      "StateMachine idempotency preserved",
+      "Network transport properly stubbed for future gRPC",
+      "All raft-rs code removed"
+    ]
+  },
+
+  "risk_mitigation": {
+    "async_complexity": {
+      "risk": "Converting sync code to async increases complexity",
+      "impact": "Medium",
+      "mitigation": "Use tokio::runtime::Handle for sync contexts, avoid blocking",
+      "affected_tasks": ["migrate_initialization", "migrate_propose", "migrate_api"]
+    },
+    "api_compatibility": {
+      "risk": "Breaking changes affect dependent crates",
+      "impact": "High",
+      "mitigation": "Document all breaking changes, create migration guide",
+      "affected_tasks": ["node_migration"]
+    },
+    "test_coverage": {
+      "risk": "Lost test coverage during migration",
+      "impact": "Medium",
+      "mitigation": "Track test count per phase, verify 85+ tests remain",
+      "affected_tasks": ["migrate_storage_tests", "migrate_node_tests"]
+    },
+    "idempotency": {
+      "risk": "Loss of idempotency guarantees in state machine",
+      "impact": "High",
+      "mitigation": "Keep existing StateMachine::apply() logic unchanged",
+      "affected_tasks": ["implement_apply", "test_idempotency"]
+    }
+  },
+
+  "success_metrics": {
+    "completion": {
+      "tasks_completed": 0,
+      "tasks_total": 24,
+      "phases_completed": 0,
+      "phases_total": 6
+    },
+    "quality": {
+      "tests_passing": "TBD (target: 85+)",
+      "prost_versions": "TBD (target: 1)",
+      "clippy_warnings": "TBD (target: 0)",
+      "compilation_errors": "TBD (target: 0)"
+    },
+    "effort": {
+      "estimated_hours_total": "15-21",
+      "actual_hours": "TBD"
+    }
+  }
+}

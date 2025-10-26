@@ -11,6 +11,7 @@ keywords.workspace = true
 [dependencies]
 seshat-common = { path = "../common" }
 seshat-kv = { path = "../kv" }
+seshat-storage = { path = "../storage" }
 raft = { version = "0.7", default-features = false, features = ["prost-codec"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }

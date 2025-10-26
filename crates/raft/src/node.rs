@@ -3,7 +3,8 @@
 //! The RaftNode integrates MemStorage, StateMachine, and raft-rs RawNode
 //! to provide a complete Raft consensus implementation.
 
-use crate::{state_machine::StateMachine, storage::MemStorage};
+use crate::state_machine::StateMachine;
+use seshat_storage::MemStorage;
 use raft::RawNode;
 
 /// Raft node that orchestrates consensus using raft-rs.

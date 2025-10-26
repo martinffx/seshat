@@ -44,14 +44,15 @@
 pub mod config;
 pub mod node;
 pub mod state_machine;
-pub mod storage;
 pub mod transport;
 
 // Re-export main types for convenience
 pub use config::{ClusterConfig, InitialMember, NodeConfig, RaftConfig};
 pub use node::RaftNode;
 pub use state_machine::StateMachine;
-pub use storage::MemStorage;
+
+// Re-export storage from seshat-storage crate
+pub use seshat_storage::MemStorage;
 
 // Re-export raft-rs message types
 pub use raft::prelude::{Entry, Message, MessageType, Snapshot};
