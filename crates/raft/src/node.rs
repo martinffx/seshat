@@ -4,8 +4,8 @@
 //! to provide a complete Raft consensus implementation.
 
 use crate::state_machine::StateMachine;
-use seshat_storage::MemStorage;
 use raft::RawNode;
+use seshat_storage::MemStorage;
 
 /// Raft node that orchestrates consensus using raft-rs.
 ///

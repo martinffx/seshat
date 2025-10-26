@@ -69,6 +69,55 @@ impl openraft::RaftTypeConfig for RaftTypeConfig {
 }
 ```
 
+### Request Type Definition
+
+The `Request` type wraps serialized operations from the KV/SQL service layers:
+
+```rust
+/// Request wrapper for operations submitted to Raft.
+///
+/// This type bridges the service layer (KV/SQL) and the Raft layer by
+/// wrapping serialized Operation bytes in a protobuf-compatible format.
+#[derive(Debug, Clone, prost::Message)]
+pub struct Request {
+    /// Serialized Operation from KV or SQL service.
+    ///
+    /// Format: protobuf-encoded Operation (e.g., Operation::Set, Operation::Del)
+    /// The Raft layer treats this as opaque bytes - deserialization happens
+    /// in the StateMachine during apply().
+    #[prost(bytes = "vec", tag = "1")]
+    pub operation_bytes: Vec<u8>,
+}
+
+impl Request {
+    /// Create a new Request from serialized operation bytes.
+    pub fn new(operation_bytes: Vec<u8>) -> Self {
+        Self { operation_bytes }
+    }
+}
+
+// Conversion from KV Service Operation to Request
+impl From<Operation> for Request {
+    fn from(op: Operation) -> Self {
+        Request {
+            operation_bytes: op.encode_to_vec(),
+        }
+    }
+}
+```
+
+**Type Hierarchy:**
+
+```
+KV Service Operation (e.g., Operation::Set { key, value })
+    ↓ (serialize with prost)
+Request { operation_bytes: Vec<u8> }
+    ↓ (wrap in LogEntry)
+LogEntry<Request> { log_id, data: Request }
+    ↓ (serialize with prost)
+Vec<u8> (stored in RocksDB via storage crate)
+```
+
 ### Type Conversions
 
 | raft-rs Type | openraft Type | Conversion Strategy |
@@ -163,6 +212,88 @@ impl RaftNetwork<RaftTypeConfig> for StubNetwork {
     // Similar stubs for vote and snapshot
 }
 ```
+
+## Error Handling
+
+### Error Type Mapping
+
+OpenRaft errors must be mapped to application-level errors for proper handling in the KV/SQL service layers:
+
+```rust
+use openraft::error::{ClientWriteError, RaftError, StorageError};
+
+/// Raft layer error type
+#[derive(Debug, thiserror::Error)]
+pub enum RaftError {
+    #[error("Not the leader (current leader: {leader_id:?})")]
+    NotLeader { leader_id: Option<u64> },
+
+    #[error("No quorum available")]
+    NoQuorum,
+
+    #[error("Storage error: {0}")]
+    Storage(#[from] StorageError<RaftTypeConfig>),
+
+    #[error("Network error: {0}")]
+    Network(String),
+
+    #[error("Serialization error: {0}")]
+    Serialization(String),
+
+    #[error("Deserialization error: {0}")]
+    Deserialization(String),
+
+    #[error("OpenRaft error: {0}")]
+    OpenRaft(String),
+}
+
+/// Convert OpenRaft ClientWriteError to RaftError
+impl From<ClientWriteError<RaftTypeConfig>> for RaftError {
+    fn from(err: ClientWriteError<RaftTypeConfig>) -> Self {
+        match err {
+            ClientWriteError::ForwardToLeader(forward) => {
+                RaftError::NotLeader {
+                    leader_id: forward.leader_id,
+                }
+            }
+            ClientWriteError::ChangeMembershipError(e) => {
+                RaftError::OpenRaft(e.to_string())
+            }
+        }
+    }
+}
+
+/// Convert OpenRaft RaftError to our RaftError
+impl From<openraft::error::RaftError<RaftTypeConfig>> for RaftError {
+    fn from(err: openraft::error::RaftError<RaftTypeConfig>) -> Self {
+        RaftError::OpenRaft(err.to_string())
+    }
+}
+```
+
+### Error Propagation Chain
+
+```
+OpenRaft Error Types
+    ↓ (map in raft crate)
+RaftError (raft crate)
+    ↓ (map in service layer)
+KvServiceError (kv crate)
+    ↓ (format)
+RespValue::Error (protocol-resp crate)
+    ↓ (encode)
+"-(error) ERR message\r\n" (client)
+```
+
+**Example Error Flow:**
+
+1. Client sends SET command
+2. RaftNode::propose() calls raft.client_write()
+3. OpenRaft returns ClientWriteError::ForwardToLeader { leader_id: Some(2) }
+4. Converted to RaftError::NotLeader { leader_id: Some(2) }
+5. KV Service maps to KvServiceError::NotLeader(2)
+6. Formatted as RespValue::Error("-MOVED 2\r\n")
+7. Client receives MOVED error with leader ID
 
 ## Dependencies
 

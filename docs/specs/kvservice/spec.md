@@ -10,7 +10,7 @@ As a Redis client, I want to execute GET/SET/DEL commands over TCP so that I can
 2. GIVEN a Redis client sends a SET command WHEN the command is parsed by RespCodec THEN KvService receives a valid RespCommand::Set with key and value
 3. GIVEN KvService receives a SET command WHEN it calls RaftNode::propose() THEN the operation is replicated to a quorum of nodes and committed via Raft consensus
 4. GIVEN a SET operation is committed WHEN the StateMachine applies the entry THEN the key-value pair is persisted to the data_kv column family in RocksDB
-5. GIVEN a Redis client sends a GET command WHEN the command is processed THEN it reads from the local StateMachine and returns the value in RESP format (eventual consistency - reads may be stale during leadership transitions with ~100ms window)
+5. GIVEN a Redis client sends a GET command WHEN the command is processed THEN it reads from the local StateMachine and returns the value in RESP format (eventual consistency - reads may be stale during leadership transitions with ~100ms window between is_leader() check and actual read operation)
 6. GIVEN a Redis client sends a command WHEN the node is not the leader THEN it returns a MOVED error with the leader's node ID
 7. GIVEN a Redis client sends a DEL command with one or more keys WHEN each key is committed via separate Raft proposals THEN the keys are removed from storage and the total deletion count is returned (matching Redis semantics where DEL is not atomic across multiple keys)
 8. GIVEN a Redis client sends a DEL command with multiple keys WHEN a quorum loss occurs mid-operation THEN partial deletions are committed and the count reflects only successfully deleted keys
@@ -72,9 +72,12 @@ As a Redis client, I want to execute GET/SET/DEL commands over TCP so that I can
 ## Dependencies
 
 - protocol-resp crate (100% complete - provides RespCodec, RespCommand, RespValue for parsing and encoding)
-- raft crate (in progress - provides RaftNode wrapper, gRPC transport, StateMachine, MemStorage)
+- **openraft migration (BLOCKING)** - must complete before KV service implementation begins
+- raft crate (in progress - provides RaftNode wrapper with openraft async APIs, gRPC transport, StateMachine, MemStorage)
 - storage crate (in progress - provides MemStorage implementation of raft::Storage trait, will migrate to RocksDB)
 - common crate (provides shared types: NodeId, Error, Result, configuration types)
+- tokio 1.x - async runtime for all I/O operations
+- prost - protobuf serialization (replaces bincode)
 - seshat binary (orchestration - needs TCP server on port 6379 that routes to KvService)
 
 ## Technical Details
@@ -92,10 +95,10 @@ As a Redis client, I want to execute GET/SET/DEL commands over TCP so that I can
 
 - **RespCodec::decode()**: From protocol-resp crate for parsing incoming RESP commands
 - **RespCodec::encode()**: From protocol-resp crate for serializing RESP responses
-- **RaftNode::propose(operation: Vec<u8>)**: For write operations (SET, DEL)
-- **RaftNode::read_local(key: Vec<u8>)**: For read operations (GET, EXISTS)
-- **RaftNode::is_leader()**: To check leadership status
-- **RaftNode::leader_id()**: To get current leader for MOVED errors
+- **RaftNode::propose(operation: Vec<u8>) -> Result<ClientWriteResponse>**: **ASYNC** - For write operations (SET, DEL)
+- **RaftNode::get(key: &[u8]) -> Option<Vec<u8>>**: **SYNC** - Direct StateMachine access for reads (GET, EXISTS) - **WARNING: Does NOT check leadership internally**
+- **RaftNode::is_leader() -> bool**: **ASYNC** - To check leadership status before reads
+- **RaftNode::leader_id() -> Option<u64>**: **ASYNC** - To get current leader for MOVED errors
 - **StateMachine::apply(entry: Entry)**: Applies committed operations to storage
 - **Storage::get(cf: &str, key: &[u8])**: Reads from data_kv column family
 - **Storage::put(cf: &str, key: &[u8], value: &[u8])**: Writes to data_kv column family
@@ -123,16 +126,16 @@ As a Redis client, I want to execute GET/SET/DEL commands over TCP so that I can
 5. KvService::validate_key_size(b'foo') - check <= 256 bytes
 6. KvService::validate_value_size(b'bar') - check <= 64KB
 7. KvService creates Operation::Set { key: b'foo', value: b'bar' }
-8. Serialize operation: let data = bincode::serialize(&operation)?
-9. KvService calls RaftNode::propose(data)
-10. RaftNode checks is_leader() - if false, return NotLeader(leader_id)
-11. RaftNode::propose() calls raft_rs::RawNode::propose(entry)
-12. raft-rs replicates entry to followers via gRPC (AppendEntries RPC)
-13. Once majority commits, raft-rs calls StateMachine::apply(entry)
-14. StateMachine deserializes operation from entry.data
+8. Serialize operation with protobuf: let data = operation.encode_to_vec()
+9. KvService calls raft_node.propose(data).await (async with openraft)
+10. RaftNode checks leadership internally (openraft handles this)
+11. openraft appends entry to local Raft log
+12. openraft replicates entry to followers via gRPC (AppendEntries RPC)
+13. Once majority commits, openraft calls StateMachine::apply(entry)
+14. StateMachine deserializes operation from entry.data using protobuf
 15. StateMachine::apply_set(key, value) calls Storage::put('data_kv', key, value)
 16. RocksDB writes to data_kv column family
-17. RaftNode::propose() returns Ok(())
+17. RaftNode::propose() returns Ok(ClientWriteResponse)
 18. KvService returns RespValue::SimpleString('OK')
 19. RespCodec::encode() serializes to '+OK\r\n'
 20. Bytes sent back to client over TCP
@@ -143,15 +146,17 @@ As a Redis client, I want to execute GET/SET/DEL commands over TCP so that I can
 2. Tokio TCP listener receives bytes
 3. RespCodec::decode() parses to RespCommand::Get { key: b'foo' }
 4. KvService::handle_command(RespCommand::Get) called
-5. KvService calls RaftNode::is_leader()
+5. KvService MUST check raft_node.is_leader().await (async with openraft)
 6. If not leader: return NotLeader(leader_id) → format MOVED error
-7. If leader: KvService calls RaftNode::read_local(b'foo')
-8. RaftNode accesses StateMachine (in-memory HashMap in Phase 1)
+7. If leader: KvService calls RaftNode::get(b'foo') (sync - direct HashMap access)
+8. RaftNode accesses StateMachine (in-memory HashMap in Phase 1) - NO internal leadership check
 9. StateMachine::get(b'foo') returns Option<Vec<u8>>
 10. If Some(value): return RespValue::BulkString(value)
 11. If None: return RespValue::Null
 12. RespCodec::encode() serializes to `$3\r\nbar\r\n` or `$-1\r\n`
 13. Bytes sent back to client over TCP
+
+**IMPORTANT**: There is a race condition window (~100ms) between Step 5 (is_leader() check) and Step 7 (get() call) where leadership may change. This provides eventual consistency. Phase 4 will add ReadIndex for linearizable reads.
 
 #### Multi-Key DEL Path
 
@@ -163,8 +168,8 @@ As a Redis client, I want to execute GET/SET/DEL commands over TCP so that I can
 6. deleted_count = 0
 7. For each key:
    - Create Operation::Del { key }
-   - Serialize operation with bincode
-   - Call RaftNode::propose(serialized_op)
+   - Serialize operation with protobuf: operation.encode_to_vec()
+   - Call RaftNode::propose(serialized_op).await (async with openraft)
    - Wait for commit
    - If success: parse result (b"1" or b"0"), add to deleted_count
    - If failure (NotLeader, NoQuorum, timeout): stop processing, return error with partial count
@@ -224,9 +229,22 @@ As a Redis client, I want to execute GET/SET/DEL commands over TCP so that I can
 - **Phase 2**: Cross-shard commands (MGET, MSET)
 - **Phase 2**: Batched DEL operations (Operation::DelMulti for atomic multi-key deletion)
 - **Phase 3**: Dynamic membership (add/remove nodes via CLUSTER commands)
+- **Phase 4**: Linearizable reads via ReadIndex (eliminates leadership race condition)
 - **Phase 4**: Follower reads with bounded staleness (trade consistency for read scalability)
 - **Phase 4**: Observability (OpenTelemetry metrics, distributed tracing)
 - **Phase 5**: SQL interface (parallel service layer using same Raft/storage infrastructure)
+
+## Estimated Effort
+
+**11-13 hours** (updated from 10-12 hours to account for OpenRaft migration integration)
+- 1 hour: KvService struct and basic setup
+- 2 hours: Command handler implementation with async/await
+- 2 hours: Validation logic and error types (including OpenRaft error mapping)
+- 3 hours: Unit tests (including async test setup with #[tokio::test])
+- 2 hours: Integration tests with single-node Raft cluster
+- 1 hour: Property tests for boundary conditions
+- 1-2 hours: seshat binary integration and end-to-end testing
+- +1 hour: OpenRaft async integration (updating all RaftNode calls with .await, error mapping)
 
 ## Alignment
 

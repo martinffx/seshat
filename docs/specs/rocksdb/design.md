@@ -8,10 +8,10 @@ This is a **pure persistence layer** - NOT the standard Router → Service → R
 
 ```
 ┌─────────────────────────────────────┐
-│   Raft Crate (RaftStorage)         │
-│   - Implements raft::Storage trait  │
-│   - Serializes/deserializes entries │
-│   - Manages Raft semantics          │
+│   Raft Crate (OpenRaftMemStorage)      │
+│   - Implements openraft storage traits │
+│   - RaftLogReader, RaftSnapshotBuilder │
+│   - RaftStorage (openraft version)    │
 └─────────────────────────────────────┘
                  │
                  │ Uses Storage methods
@@ -338,8 +338,8 @@ pub enum StorageError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("Serialization error: {0}")]
-    Serialization(#[from] bincode::Error),
+    #[error("Protobuf decode error: {0}")]
+    ProtobufDecode(#[from] prost::DecodeError),
 
     #[error("Column family not found: {0}")]
     ColumnFamilyNotFound(String),
@@ -377,38 +377,38 @@ pub type Result<T> = std::result::Result<T, StorageError>;
    - Optimize for: Sequential writes, range scans
    - Compaction: Level style, aggressive (keep log size small)
    - Key format: `"log:{:020}"` (e.g., `"log:00000000000000000142"`) - zero-padded for correct lexicographic ordering
-   - Value: `bincode::serialize(&VersionedLogEntry)`
+   - Value: Protobuf serialized LogEntry (via prost)
 
 2. **system_raft_state** - System group hard state
    - Optimize for: Single-key updates with fsync
    - Compaction: Disabled (always <1KB)
    - Key format: `"state"` (single entry)
-   - Value: `bincode::serialize(&RaftHardState)`
+   - Value: Protobuf serialized RaftHardState (via prost)
 
 3. **system_data** - Cluster metadata
    - Optimize for: Small number of keys (<10), infrequent updates
    - Compaction: Disabled (bounded size ~100KB)
    - Keys: `"membership"`, `"shardmap"`
-   - Values: `bincode::serialize(&ClusterMembership)` or `&ShardMap`
+   - Values: Protobuf serialized ClusterMembership or ShardMap (via prost)
 
 4. **data_raft_log** - Data shard Raft log
    - Optimize for: High-throughput sequential writes, range scans
    - Compaction: Level style, moderate
    - Key format: `"log:{:020}"` (zero-padded for correct lexicographic ordering)
-   - Value: `bincode::serialize(&VersionedLogEntry)`
+   - Value: Protobuf serialized LogEntry (via prost)
 
 5. **data_raft_state** - Data shard hard state
    - Optimize for: Single-key updates with fsync
    - Compaction: Disabled (always <1KB)
    - Key format: `"state"`
-   - Value: `bincode::serialize(&RaftHardState)`
+   - Value: Protobuf serialized RaftHardState (via prost)
 
 6. **data_kv** - User key-value data
    - Optimize for: Random reads/writes, high key count
    - Bloom filters: Enabled (10 bits per key)
    - Prefix extractor: 4-byte hash prefix
    - Key format: Raw user bytes (no encoding)
-   - Value: `bincode::serialize(&StoredValue)`
+   - Value: Protobuf serialized StoredValue (via prost)
 
 #### Write-Ahead Log (WAL)
 
@@ -469,24 +469,25 @@ pub type Result<T> = std::result::Result<T, StorageError>;
 
 ### Serialization Strategy
 
-**Format**: `bincode` for all Rust structs
-- Faster than JSON
-- More compact than protobuf for Rust-to-Rust communication
-- No schema files required (self-describing in code)
+**Format**: Protobuf (prost) for all storage serialization
+- **Rationale**: Single format for storage + network, schema evolution, industry alignment
+- **Schema Definition**: .proto files in `protocol/` directory
+- **Code Generation**: prost-build generates Rust types at compile time
+- **No bincode**: Protobuf used exclusively throughout the system (see `openraft/SERIALIZATION_DECISION.md`)
 
-**Version Handling**: All persisted structs have `version: u8` as first field
-```rust
-#[derive(Serialize, Deserialize)]
-struct VersionedLogEntry {
-    version: u8,  // CURRENT_VERSION = 1 in Phase 1
-    index: u64,
-    term: u64,
-    data: Vec<u8>,
+**Version Handling**: Protobuf provides built-in schema evolution
+```proto
+message LogEntry {
+  uint64 version = 1;  // CURRENT_VERSION = 1 in Phase 1
+  uint64 index = 2;
+  uint64 term = 3;
+  bytes data = 4;
 }
 ```
 
 **Migration Path**:
-- If `version < CURRENT_VERSION`: Run migration logic
+- Protobuf handles forward/backward compatibility through optional fields and default values
+- If incompatible schema change: Increment version field, implement migration logic
 - If `version > CURRENT_VERSION`: **Refuse to start** (cannot read future formats)
 
 ## Data Flows
@@ -554,22 +555,40 @@ struct VersionedLogEntry {
 
 **Efficiency**: O(1) time - uses hard links (no data copying). Zero additional disk space initially. Space diverges as original DB changes.
 
-### Raft Integration Flow
+### OpenRaft Integration Flow
+
+**IMPORTANT**: After OpenRaft migration, this integration uses openraft storage traits, not raft-rs.
 
 ```
-1. Raft crate: RaftStorage owns Storage instance
-2. raft-rs calls: storage_trait.append(entries)
-3. RaftStorage serializes: entries -> Vec<VersionedLogEntry> -> Vec<Vec<u8>>
-4. RaftStorage calls: storage.append_log_entry(ColumnFamily::DataRaftLog, index, bytes)
+Read Path (via RaftLogReader trait):
+1. openraft calls: RaftLogReader::try_get_log_entries(range)
+2. OpenRaftMemStorage (in raft crate) selects CF based on shard_id
+3. OpenRaftMemStorage calls: storage.get_log_range(cf, range.start, range.end)
+4. Storage reads from RocksDB: db.get_cf(cf, b"log:{:020}")
+5. Storage returns: Vec<Vec<u8>> (serialized log entries)
+6. OpenRaftMemStorage deserializes: Vec<u8> -> LogEntry<Request>
+7. OpenRaftMemStorage returns: Vec<LogEntry<Request>> to openraft
+
+Write Path (via RaftStorage trait):
+1. openraft calls: RaftStorage::append(entries)
+2. OpenRaftMemStorage serializes: LogEntry<Request> -> Vec<u8> (protobuf via prost)
+3. OpenRaftMemStorage selects CF based on shard_id
+4. OpenRaftMemStorage calls: storage.append_log_entry(cf, index, &bytes)
 5. Storage validates: No gaps in log indices (fails with InvalidLogIndex if gap detected)
-6. Storage calls: db.put_cf(data_raft_log, b"log:{index}", bytes)
+6. Storage calls: db.put_cf(data_raft_log, b"log:{:020}", bytes)
 7. Storage returns: Ok(())
-8. RaftStorage returns: Success to raft-rs
+8. OpenRaftMemStorage returns: Success to openraft
 ```
 
 **Separation of Concerns**:
-- **RaftStorage (raft crate)**: Understands Raft semantics, handles serialization
-- **Storage (storage crate)**: Pure persistence, stores bytes as directed
+- **OpenRaftMemStorage (raft crate)**: Implements openraft storage traits, handles serialization, understands Raft semantics
+- **Storage (storage crate)**: Pure persistence layer, stores bytes as directed, no Raft knowledge
+
+**Key Differences from raft-rs**:
+- OpenRaft uses three separate traits (RaftLogReader, RaftSnapshotBuilder, RaftStorage) instead of single Storage trait
+- All trait methods are async (requires tokio runtime)
+- Different entry types: `LogEntry<Request>` instead of `eraftpb::Entry`
+- Storage layer remains synchronous (RocksDB operations), async wrapper in raft crate
 
 ## Module Organization
 
@@ -619,103 +638,161 @@ pub use error::{StorageError, Result};
 
 ### Raft Crate Integration
 
-**Wrapper Struct**:
+**IMPORTANT**: This section describes the integration AFTER OpenRaft migration is complete.
+
+**OpenRaft Storage Implementation**:
 ```rust
-// In raft crate
-pub struct RaftStorage {
-    storage: Storage,  // Owns storage instance
-    shard_id: u64,     // System (0) or data shard ID
+// In raft crate (crates/raft/src/storage.rs or crates/storage/src/openraft_storage.rs)
+use openraft::storage::{RaftLogReader, RaftSnapshotBuilder, RaftStorage as OpenRaftStorageTrait};
+use seshat_storage::Storage; // RocksDB storage layer
+
+pub struct OpenRaftMemStorage {
+    storage: Arc<Storage>,
+    shard_id: u64,  // System (0) or data shard ID
 }
 
-impl raft::Storage for RaftStorage {
-    fn append(&mut self, entries: &[Entry]) -> raft::Result<()> {
-        // Serialize Entry -> VersionedLogEntry -> bytes
+// Read operations
+#[async_trait]
+impl RaftLogReader<RaftTypeConfig> for OpenRaftMemStorage {
+    async fn try_get_log_entries(
+        &mut self,
+        range: std::ops::Range<u64>
+    ) -> Result<Vec<LogEntry<Request>>> {
+        let cf = self.select_log_cf();
+        let bytes_vec = self.storage.get_log_range(cf, range.start, range.end)?;
+
+        // Deserialize each entry using protobuf
+        use prost::Message;
+        bytes_vec.into_iter()
+            .map(|bytes| LogEntry::decode(&bytes[..]))
+            .collect()
+    }
+
+    async fn read_vote(&mut self) -> Result<Option<Vote<u64>>> {
+        let cf = self.select_state_cf();
+        match self.storage.get(cf, b"vote")? {
+            Some(bytes) => {
+                use prost::Message;
+                Ok(Some(Vote::decode(&bytes[..])?))
+            },
+            None => Ok(None),
+        }
+    }
+
+    // ... other RaftLogReader methods
+}
+
+// Write operations
+#[async_trait]
+impl OpenRaftStorageTrait<RaftTypeConfig> for OpenRaftMemStorage {
+    async fn append<I>(
+        &mut self,
+        entries: I
+    ) -> Result<()>
+    where
+        I: IntoIterator<Item = LogEntry<Request>> + Send,
+    {
+        let cf = self.select_log_cf();
+
         for entry in entries {
-            let versioned = VersionedLogEntry {
-                version: CURRENT_VERSION,
-                index: entry.index,
-                term: entry.term,
-                data: entry.data.clone(),
-            };
-            let bytes = bincode::serialize(&versioned)?;
-
-            // Select CF based on shard_id
-            let cf = if self.shard_id == 0 {
-                ColumnFamily::SystemRaftLog
-            } else {
-                ColumnFamily::DataRaftLog
-            };
-
-            self.storage.append_log_entry(cf, entry.index, &bytes)?;
+            use prost::Message;
+            let bytes = entry.encode_to_vec();
+            self.storage.append_log_entry(cf, entry.log_id.index, &bytes)?;
         }
         Ok(())
     }
 
-    // Similar implementations for other raft::Storage methods
+    async fn save_vote(&mut self, vote: &Vote<u64>) -> Result<()> {
+        let cf = self.select_state_cf();
+        use prost::Message;
+        let bytes = vote.encode_to_vec();
+        self.storage.put(cf, b"vote", &bytes)?;
+        Ok(())
+    }
+
+    // ... other RaftStorage methods
+}
+
+impl OpenRaftMemStorage {
+    fn select_log_cf(&self) -> ColumnFamily {
+        if self.shard_id == 0 {
+            ColumnFamily::SystemRaftLog
+        } else {
+            ColumnFamily::DataRaftLog
+        }
+    }
+
+    fn select_state_cf(&self) -> ColumnFamily {
+        if self.shard_id == 0 {
+            ColumnFamily::SystemRaftState
+        } else {
+            ColumnFamily::DataRaftState
+        }
+    }
 }
 ```
 
 **Responsibilities**:
-- **RaftStorage**: Raft semantics, serialization, CF selection
-- **Storage**: Pure persistence, thread-safety, atomicity
+- **OpenRaftMemStorage**: Implements openraft storage traits, handles protobuf serialization/deserialization, CF selection
+- **Storage**: Pure persistence (stores raw bytes), thread-safety, atomicity, RocksDB operations
+
+**Serialization Strategy**:
+- **Format**: Protobuf (prost) for all storage serialization
+- **Rationale**: Single format for storage + network, schema evolution, industry alignment (see `openraft/SERIALIZATION_DECISION.md`)
+- **No bincode**: Protobuf used exclusively throughout the system
 
 ### Common Crate Dependencies
 
-**Data Structures Defined in `common` Crate**:
-```rust
-// common/src/raft.rs
-#[derive(Serialize, Deserialize)]
-pub struct VersionedLogEntry {
-    pub version: u8,
-    pub index: u64,
-    pub term: u64,
-    pub data: Vec<u8>,
+**Data Structures Defined in Protobuf Schema**:
+```proto
+// protocol/raft.proto
+message LogEntry {
+  uint64 version = 1;
+  uint64 index = 2;
+  uint64 term = 3;
+  bytes data = 4;
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct RaftHardState {
-    pub version: u8,
-    pub term: u64,
-    pub vote: u64,
-    pub commit: u64,
+message RaftHardState {
+  uint64 version = 1;
+  uint64 term = 2;
+  uint64 vote = 3;
+  uint64 commit = 4;
 }
 
-// common/src/storage.rs
-#[derive(Serialize, Deserialize)]
-pub struct StoredValue {
-    pub version: u8,
-    pub data: Vec<u8>,
-    pub created_at: u64,
-    pub ttl: Option<u64>,
+// protocol/storage.proto
+message StoredValue {
+  uint64 version = 1;
+  bytes data = 2;
+  uint64 created_at = 3;
+  optional uint64 ttl = 4;
 }
 
-// common/src/cluster.rs
-#[derive(Serialize, Deserialize)]
-pub struct ClusterMembership {
-    pub version: u8,
-    pub nodes: Vec<NodeInfo>,
+// protocol/cluster.proto
+message ClusterMembership {
+  uint64 version = 1;
+  repeated NodeInfo nodes = 2;
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct ShardMap {
-    pub version: u8,
-    pub shards: Vec<ShardInfo>,
+message ShardMap {
+  uint64 version = 1;
+  repeated ShardInfo shards = 2;
 }
 
-// common/src/snapshot.rs
-#[derive(Serialize, Deserialize)]
-pub struct SnapshotMetadata {
-    pub last_included_index: u64,
-    pub last_included_term: u64,
-    pub created_at: u64,
-    pub size_bytes: u64,
+// protocol/snapshot.proto
+message SnapshotMetadata {
+  uint64 last_included_index = 1;
+  uint64 last_included_term = 2;
+  uint64 created_at = 3;
+  uint64 size_bytes = 4;
 }
 ```
 
 **Dependency Flow**:
 - `storage` crate: Stores bytes, no knowledge of data structures
-- `common` crate: Defines data structures shared across crates
-- `raft` crate: Serializes data structures before passing to storage
+- `protocol` directory: Defines protobuf schemas shared across crates
+- `raft` crate: Serializes protobuf messages using prost before passing to storage
+- `common` crate: Re-exports generated protobuf types for convenience
 
 ## Performance Considerations
 

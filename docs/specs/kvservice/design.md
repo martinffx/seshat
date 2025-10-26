@@ -8,15 +8,20 @@ The KV service layer is a critical component of Seshat that bridges the RESP pro
 
 ## Dependencies
 
-**⚠️ Important**: This specification assumes the **OpenRaft migration** (see `docs/specs/openraft/`) is complete. The design uses async/await patterns that depend on OpenRaft's async APIs:
-- `raft_node.propose(data).await` - Async proposal submission that waits for commit
-- `raft_node.get(key).await` - Async read from state machine
-- OpenRaft provides proper async/await semantics, unlike raft-rs's synchronous APIs
+**⚠️ CRITICAL BLOCKER**: This specification requires the **OpenRaft migration** (see `docs/specs/openraft/`) to be **100% complete** before KvService implementation can begin. The design uses async/await patterns that depend on OpenRaft's async APIs.
 
 **Implementation Order**:
-1. Complete OpenRaft migration first (see `docs/specs/openraft/`)
+1. **Complete OpenRaft migration first** (all 6 phases in `docs/specs/openraft/`)
 2. Complete RocksDB storage integration (see `docs/specs/rocksdb/`)
 3. Then implement KvService with async handlers
+
+**Required OpenRaft Changes**:
+- `raft_node.propose(data).await` - **NOW ASYNC**: Returns `Result<ClientWriteResponse>`
+- `raft_node.get(key)` - **STILL SYNC**: Direct StateMachine access (NO internal leadership check)
+- `raft_node.is_leader().await` - **NOW ASYNC**: Must be called before reads
+- `raft_node.leader_id().await` - **NOW ASYNC**: For MOVED error responses
+- **Error types**: Changed from raft-rs to openraft errors
+- **Serialization**: Changed from bincode to protobuf (prost)
 
 These dependencies exist because:
 - OpenRaft provides async APIs (`propose().await`) that KvService requires
@@ -79,7 +84,9 @@ pub struct KvService {
 **Location**: `crates/kv/src/operations.rs` (already implemented)
 
 ```rust
-#[derive(Serialize, Deserialize)]
+use prost::Message;
+
+#[derive(Message)]
 pub enum Operation {
     /// Insert or update key-value pair
     Set { key: Vec<u8>, value: Vec<u8> },
@@ -91,10 +98,24 @@ impl Operation {
     pub fn apply(&self, state: &mut HashMap<Vec<u8>, Vec<u8>>) -> OperationResult<Vec<u8>> {
         // Apply operation to state machine
     }
+
+    pub fn encode_to_vec(&self) -> Vec<u8> {
+        // Protobuf serialization
+    }
+
+    pub fn decode(data: &[u8]) -> Result<Self, prost::DecodeError> {
+        // Protobuf deserialization
+    }
 }
 ```
 
-**Serialization**: Implements `Serialize`/`Deserialize` using bincode for Raft log entries
+**Serialization**: Uses **protobuf (prost)** for Raft log entries (replaces bincode)
+
+**Rationale for Protobuf**:
+- Schema evolution support (forward/backward compatibility)
+- Consistent with storage layer and network layer
+- Better cross-language compatibility
+- Aligns with OpenRaft's recommended approach
 
 **Idempotency**:
 - SET is idempotent (last write wins)
@@ -143,17 +164,51 @@ pub struct StateMachine {
 
 ### RaftNode
 
-**Location**: `crates/raft/src/node.rs` (implemented)
+**Location**: `crates/raft/src/node.rs` (implemented with OpenRaft)
 
-**Key Methods**:
-- `propose(data: Vec<u8>) -> Result<()>` - Submit write to Raft (only works on leader)
-- `get(key: &[u8]) -> Option<Vec<u8>>` - Read from state machine (**WARNING: Does NOT check leadership internally**)
-- `is_leader() -> bool` - Check if this node is leader
-- `leader_id() -> Option<u64>` - Get current leader ID for redirection
+**Key Methods** (After OpenRaft Migration):
+- `async fn propose(&self, data: Vec<u8>) -> Result<ClientWriteResponse>` - **ASYNC** - Submit write to Raft, waits for commit
+- `fn get(&self, key: &[u8]) -> Option<Vec<u8>>` - **SYNC** - Direct StateMachine access (**WARNING: Does NOT check leadership internally**)
+- `async fn is_leader(&self) -> bool` - **ASYNC** - Check if this node is leader
+- `async fn leader_id(&self) -> Option<u64>` - **ASYNC** - Get current leader ID for redirection
 
-**Consensus**: Wraps raft-rs `RawNode`, handles leader election, log replication, commit tracking
+**Consensus**: Wraps openraft `Raft`, handles leader election, log replication, commit tracking
 
 **gRPC**: Integrated gRPC transport for AppendEntries, RequestVote, InstallSnapshot messages
+
+### OpenRaft API Changes
+
+**IMPORTANT**: After OpenRaft migration, RaftNode uses openraft's async API.
+
+**API Changes from raft-rs**:
+```rust
+// OLD (raft-rs - synchronous):
+impl RaftNode {
+    fn propose(&mut self, data: Vec<u8>) -> Result<()>  // Sync
+    fn get(&self, key: &[u8]) -> Option<Vec<u8>>       // Sync
+    fn is_leader(&self) -> bool                         // Sync
+    fn leader_id(&self) -> Option<u64>                  // Sync
+}
+
+// NEW (openraft - asynchronous):
+impl RaftNode {
+    async fn propose(&self, data: Vec<u8>) -> Result<ClientWriteResponse>  // Async!
+    fn get(&self, key: &[u8]) -> Option<Vec<u8>>                           // Still sync (direct StateMachine access)
+    async fn is_leader(&self) -> bool                                      // Async!
+    async fn leader_id(&self) -> Option<u64>                               // Async!
+}
+```
+
+**Critical Leadership Check Contract**:
+- `RaftNode::get()` does NOT check leadership internally (direct HashMap access)
+- KvService MUST call `is_leader().await` before calling `get()`
+- Without this check, followers will serve stale reads
+- This is intentional in Phase 1 for simplicity (Phase 4 adds ReadIndex for linearizable reads)
+
+**Error Type Changes**:
+- raft-rs errors → openraft errors
+- Different error variants and semantics
+- KvServiceError must map from openraft error types
 
 ## API Specification
 
@@ -172,20 +227,42 @@ async fn handle_get(&self, key: Vec<u8>) -> Result<RespValue, KvServiceError>
 ```
 
 **Behavior**:
-1. Call `raft_node.get(key).await` to read from local state machine (no leadership check)
-2. Return `RespValue::BulkString(value)` or `RespValue::Null`
+1. **MUST** check if leader via `raft_node.is_leader().await` for consistency
+2. If not leader, return `NotLeader` error
+3. If leader, call `raft_node.get(&key)` (sync - direct StateMachine HashMap access)
+4. Return `RespValue::BulkString(value)` or `RespValue::Null`
 
-**Read Consistency Model (Eventual Consistency)**:
-- Reads are served directly from the local StateMachine without leadership verification
-- This provides eventual consistency - reads may be stale during leadership transitions (~100ms window)
-- **Acceptable for Phase 1**: Trade-off favors simplicity and performance over strong consistency for reads
-- All nodes (leaders and followers) can serve reads from their local state
-- State converges through Raft log replication
-- **Phase 4 enhancement**: Add linearizable reads via ReadIndex mechanism for stronger consistency guarantees
+**Implementation**:
+```rust
+async fn handle_get(&self, key: Vec<u8>) -> Result<RespValue, KvServiceError> {
+    // MUST check leadership first (get() doesn't check internally)
+    if !self.raft_node.is_leader().await {  // <-- .await added
+        let leader_id = self.raft_node.leader_id().await;  // <-- .await added
+        return Err(KvServiceError::NotLeader { leader_id });
+    }
 
-**Errors**: None for consistency (reads always succeed if key exists)
+    // get() is sync (direct StateMachine access)
+    match self.raft_node.get(&key) {
+        Some(value) => Ok(RespValue::BulkString(value.into())),
+        None => Ok(RespValue::Null),
+    }
+}
+```
 
-**Latency Target**: < 5ms p99 (in-memory HashMap lookup)
+**Read Consistency Model - Leadership Transition Race**:
+- Reads may be stale during leadership transitions (window of ~100ms)
+- While KvService checks `is_leader().await` before reads, leadership can change before `get()` completes
+- `is_leader()` is async (checks openraft state)
+- `get()` is sync (direct StateMachine HashMap access, no internal leadership check)
+- **Race window**: Between `is_leader().await` returning true and `get()` executing
+- Old leader may serve reads briefly after losing leadership
+- New leader may not have all committed entries immediately after election
+- Clients may observe "time travel": newer value → older value → newer value
+- Phase 4 will add linearizable reads via ReadIndex to eliminate this race
+
+**Errors**: `NotLeader` if not leader (prevents most stale reads, but race condition still exists)
+
+**Latency Target**: < 5ms p99 (in-memory HashMap lookup + leadership check)
 
 #### handle_set
 
@@ -197,9 +274,28 @@ async fn handle_set(&self, key: Vec<u8>, value: Vec<u8>) -> Result<RespValue, Kv
 1. Validate key size <= 256 bytes
 2. Validate value size <= 64KB
 3. Create `Operation::Set { key, value }`
-4. Serialize with bincode
+4. Serialize with protobuf: `operation.encode_to_vec()`
 5. Call `raft_node.propose(serialized_op).await` (async/await - waits for commit)
 6. Return `RespValue::Ok` on success
+
+**Implementation**:
+```rust
+async fn handle_set(&self, key: Vec<u8>, value: Vec<u8>) -> Result<RespValue, KvServiceError> {
+    // Validation
+    validate_key_size(&key)?;
+    validate_value_size(&value)?;
+
+    // Serialize operation with protobuf
+    let operation = Operation::Set { key, value };
+    use prost::Message;
+    let data = operation.encode_to_vec();
+
+    // Propose via Raft (async with openraft)
+    self.raft_node.propose(data).await?;  // <-- .await added
+
+    Ok(RespValue::SimpleString("OK".into()))
+}
+```
 
 **Errors**: `KeyTooLarge`, `ValueTooLarge`, `NotLeader`, `NoQuorum`, `ProposalFailed`
 
@@ -215,11 +311,47 @@ async fn handle_del(&self, keys: Vec<Vec<u8>>) -> Result<RespValue, KvServiceErr
 1. Validate each key size <= 256 bytes
 2. For each key:
    - Create `Operation::Del { key }`
-   - Serialize with bincode
+   - Serialize with protobuf: `operation.encode_to_vec()`
    - Call `raft_node.propose(serialized_op).await` (async/await - waits for commit)
    - Track success/failure
 3. Accumulate deleted count from successful proposals
 4. Return `RespValue::Integer(deleted_count)`
+
+**Implementation**:
+```rust
+async fn handle_del(&self, keys: Vec<Vec<u8>>) -> Result<RespValue, KvServiceError> {
+    // Validation
+    for key in &keys {
+        validate_key_size(key)?;
+    }
+
+    let mut deleted_count = 0;
+
+    // Each key is a separate Raft proposal
+    for key in keys {
+        let operation = Operation::Del { key };
+        use prost::Message;
+        let data = operation.encode_to_vec();
+
+        // Propose (async)
+        match self.raft_node.propose(data).await {  // <-- .await added
+            Ok(response) => {
+                // Parse response to get deletion count (1 or 0)
+                deleted_count += parse_del_result(&response)?;
+            }
+            Err(e) => {
+                // Partial failure - return what we deleted so far with error
+                return Err(KvServiceError::PartialFailure {
+                    completed: deleted_count,
+                    error: Box::new(e),
+                });
+            }
+        }
+    }
+
+    Ok(RespValue::Integer(deleted_count))
+}
+```
 
 **Multi-Key Atomicity Semantics**:
 
@@ -275,13 +407,33 @@ async fn handle_exists(&self, keys: Vec<Vec<u8>>) -> Result<RespValue, KvService
 ```
 
 **Behavior**:
-1. **MUST** check if leader via `raft_node.is_leader()` for consistency
+1. **MUST** check if leader via `raft_node.is_leader().await` for consistency
 2. If not leader, return `NotLeader` error
-3. For each key, call `raft_node.get(key)`
+3. For each key, call `raft_node.get(key)` (sync)
 4. Count how many exist
 5. Return `RespValue::Integer(exists_count)`
 
-**Errors**: `NotLeader` if not leader (prevents stale reads)
+**Implementation**:
+```rust
+async fn handle_exists(&self, keys: Vec<Vec<u8>>) -> Result<RespValue, KvServiceError> {
+    // MUST check leadership (get() doesn't check internally)
+    if !self.raft_node.is_leader().await {  // <-- .await added
+        let leader_id = self.raft_node.leader_id().await;  // <-- .await added
+        return Err(KvServiceError::NotLeader { leader_id });
+    }
+
+    let mut exists_count = 0;
+    for key in &keys {
+        if self.raft_node.get(key).is_some() {
+            exists_count += 1;
+        }
+    }
+
+    Ok(RespValue::Integer(exists_count))
+}
+```
+
+**Errors**: `NotLeader` if not leader (prevents most stale reads, but race condition still exists)
 
 **Redis Semantics**: EXISTS accepts multiple keys, returns count of existing keys
 
@@ -294,6 +446,17 @@ async fn handle_ping(&self, message: Option<Vec<u8>>) -> Result<RespValue, KvSer
 **Behavior**:
 1. If message is `Some(msg)`, return `RespValue::BulkString(msg)`
 2. If None, return `RespValue::SimpleString("PONG")`
+
+**Implementation**:
+```rust
+async fn handle_ping(&self, message: Option<Vec<u8>>) -> Result<RespValue, KvServiceError> {
+    // No async needed - no Raft interaction
+    match message {
+        Some(msg) => Ok(RespValue::BulkString(msg.into())),
+        None => Ok(RespValue::SimpleString("PONG".into())),
+    }
+}
+```
 
 **Errors**: None (no Raft interaction)
 
@@ -341,15 +504,45 @@ pub enum KvServiceError {
     #[error("proposal failed: {0}")]
     ProposalFailed(String),
 
-    /// Operation serialization failed
+    /// Operation serialization failed (protobuf)
     #[error("serialization error: {0}")]
-    SerializationError(#[from] bincode::Error),
+    SerializationError(#[from] prost::DecodeError),
 
-    /// Internal Raft error
+    /// OpenRaft error (replaces RaftError)
     #[error("raft error: {0}")]
-    RaftError(Box<dyn std::error::Error>),
+    OpenRaftError(Box<dyn std::error::Error + Send + Sync>),
+
+    /// Partial multi-key operation failure (for DEL with multiple keys)
+    #[error("partial failure: completed {completed} operations before error")]
+    PartialFailure {
+        completed: i64,
+        error: Box<dyn std::error::Error + Send + Sync>,
+    },
+}
+
+// Implement From for openraft errors
+impl From<openraft::error::ClientWriteError<RaftTypeConfig>> for KvServiceError {
+    fn from(err: openraft::error::ClientWriteError<RaftTypeConfig>) -> Self {
+        match err {
+            openraft::error::ClientWriteError::ForwardToLeader(fwd) => {
+                KvServiceError::NotLeader {
+                    leader_id: fwd.leader_id,
+                }
+            }
+            openraft::error::ClientWriteError::ChangeMembershipError(_) => {
+                KvServiceError::OpenRaftError(Box::new(err))
+            }
+            _ => KvServiceError::OpenRaftError(Box::new(err)),
+        }
+    }
 }
 ```
+
+**Key Changes**:
+- `SerializationError` now uses `prost::DecodeError` instead of `bincode::Error`
+- `RaftError` renamed to `OpenRaftError` with updated type signature
+- Added `PartialFailure` variant for multi-key DEL operations
+- Added `From` implementation for openraft's `ClientWriteError`
 
 **to_resp_value()**: Implementation method to convert `KvServiceError` to `RespValue::Error` for client responses
 
@@ -568,24 +761,24 @@ Step 8:  Creates Operation::Set { key: b"foo", value: b"bar" }
 
 Step 9:  Calls raft_node.propose(serialized_operation)
 
-Step 10: RaftNode checks is_leader()
-         - If follower → return NotLeader error
+Step 10: openraft checks leadership internally
+         - If follower → return ForwardToLeader error
          - If leader → continue
 
-Step 11: RaftNode appends to local Raft log
+Step 11: openraft appends to local Raft log
 
-Step 12: RaftNode sends AppendEntries gRPC to followers (nodes 2, 3)
+Step 12: openraft sends AppendEntries gRPC to followers (nodes 2, 3)
 
 Step 13: Followers append to logs, respond with success
 
-Step 14: Once majority (2/3) ack, RaftNode commits entry
+Step 14: Once majority (2/3) ack, openraft commits entry
 
-Step 15: RaftNode calls StateMachine::apply()
-         - Deserializes Operation::Set
+Step 15: openraft calls StateMachine::apply()
+         - Deserializes Operation::Set using protobuf
          - Calls op.apply(&mut hashmap)
          - HashMap inserts ("foo", "bar")
 
-Step 16: raft_node.propose() returns success to KvService
+Step 16: raft_node.propose().await returns ClientWriteResponse to KvService
 
 Step 17: KvService returns Ok(RespValue::SimpleString("+OK"))
 
@@ -608,13 +801,13 @@ Step 2-6: Same parsing flow as SET
 Step 7:  route_command() calls:
          kv_service.handle_get(b"foo")
 
-Step 8:  KvService::handle_get() checks raft_node.is_leader()
+Step 8:  KvService::handle_get() MUST check raft_node.is_leader().await  // <-- async
          - If follower → return NotLeader { leader_id: Some(1) }
          - If leader → continue
 
-Step 9:  Calls raft_node.get(b"foo")
+Step 9:  Calls raft_node.get(b"foo")  // <-- sync (direct HashMap access)
 
-Step 10: RaftNode reads from StateMachine HashMap
+Step 10: RaftNode reads from StateMachine HashMap (NO internal leadership check)
          - No Raft consensus needed (local read)
          - Returns Some(b"bar") or None
 
@@ -625,6 +818,8 @@ Step 11: KvService returns:
 Step 12: RespCodec encodes to: $3\r\nbar\r\n or $-1\r\n
 
 Step 13: redis-cli receives: "bar" or (nil)
+
+**IMPORTANT**: Race condition exists between Step 8 (is_leader() check) and Step 9 (get() call) - leadership may change in ~100ms window.
 ```
 
 ### Leader Redirection Flow
@@ -634,10 +829,10 @@ Step 13: redis-cli receives: "bar" or (nil)
 ```
 Step 1-9: Same flow until raft_node.propose()
 
-Step 10: RaftNode::propose() checks is_leader() → false
-         Returns Err(NotLeader)
+Step 10: openraft checks leadership internally → not leader
+         Returns Err(ForwardToLeader)
 
-Step 11: KvService receives error, calls raft_node.leader_id()
+Step 11: KvService receives error, calls raft_node.leader_id().await  // <-- async
          Returns Some(1) (current leader is node 1)
 
 Step 12: KvService returns:
@@ -788,19 +983,19 @@ Step 4:  seshat binary routes to KvService::handle_set(b"foo", b"bar")
 Step 5:  KvService validates key (3 bytes) <= 256 bytes ✓
 Step 6:  KvService validates value (3 bytes) <= 64KB ✓
 Step 7:  KvService creates Operation::Set { key: b"foo", value: b"bar" }
-Step 8:  KvService serializes Operation with bincode
-Step 9:  KvService calls raft_node.propose(serialized_op)
-Step 10: RaftNode checks is_leader(). If follower, return NotLeader error →
-         KvService returns MOVED <leader_id>
-Step 11: RaftNode (leader) appends entry to local Raft log
-Step 12: RaftNode sends AppendEntries RPC via gRPC to followers (node 2, node 3)
+Step 8:  KvService serializes Operation with protobuf: operation.encode_to_vec()
+Step 9:  KvService calls raft_node.propose(serialized_op).await  // <-- async
+Step 10: openraft checks leadership internally. If follower, return ForwardToLeader error →
+         KvService converts to NotLeader, returns MOVED <leader_id>
+Step 11: openraft (leader) appends entry to local Raft log
+Step 12: openraft sends AppendEntries RPC via gRPC to followers (node 2, node 3)
 Step 13: Followers append entry to their logs and respond with success
-Step 14: Once majority (2/3) respond, RaftNode commits the entry
-Step 15: RaftNode calls StateMachine::apply(index, serialized_op)
-Step 16: StateMachine deserializes Operation::Set
+Step 14: Once majority (2/3) respond, openraft commits the entry
+Step 15: openraft calls StateMachine::apply(index, serialized_op)
+Step 16: StateMachine deserializes Operation::Set using protobuf
 Step 17: StateMachine calls op.apply(&mut hashmap) → inserts ("foo", "bar")
-Step 18: RaftNode signals commit success to waiting propose() call
-Step 19: KvService receives success, returns RespValue::Ok
+Step 18: openraft signals commit success to waiting propose().await call
+Step 19: KvService receives ClientWriteResponse, returns RespValue::Ok
 Step 20: RespCodec encodes "+OK\r\n" and sends to client
 ```
 
@@ -811,10 +1006,10 @@ Step 1:  TCP Client sends: GET foo
 Step 2:  seshat binary TcpListener receives on port 6379
 Step 3:  RespCodec parses into RespCommand::Get{key: "foo"}
 Step 4:  seshat binary routes to KvService::handle_get(b"foo")
-Step 5:  KvService MUST check raft_node.is_leader()
+Step 5:  KvService MUST check raft_node.is_leader().await  // <-- async
 Step 6:  If not leader → return NotLeader error → client gets MOVED response
-Step 7:  If leader → call raft_node.get(b"foo")
-Step 8:  RaftNode reads from StateMachine HashMap (no additional leadership check)
+Step 7:  If leader → call raft_node.get(b"foo")  // <-- sync (direct HashMap)
+Step 8:  RaftNode reads from StateMachine HashMap (NO additional leadership check)
 Step 9:  StateMachine returns Some(b"bar") if key exists, None otherwise
 Step 10: KvService converts to RespValue::BulkString(b"bar") or RespValue::Null
 Step 11: RespCodec encodes "$3\r\nbar\r\n" or "$-1\r\n" and sends to client
@@ -823,13 +1018,16 @@ Step 11: RespCodec encodes "$3\r\nbar\r\n" or "$-1\r\n" and sends to client
 **Read Consistency Implementation Details**:
 
 1. **KvService's Responsibility**:
-   - MUST call `is_leader()` before `get()` to enforce leader-only reads
-   - `RaftNode::get()` itself does NOT verify leadership internally
-   - Without this check, any node (including followers) can serve potentially stale reads
+   - MUST call `is_leader().await` before `get()` to enforce leader-only reads
+   - `is_leader()` is async (checks openraft state)
+   - `RaftNode::get()` itself is sync and does NOT verify leadership internally
+   - Without the `is_leader()` check, any node (including followers) can serve potentially stale reads
 
 2. **Race Condition Window**:
-   - Leadership may change between Step 5 (`is_leader()` check) and Step 7 (`get()` call)
+   - Leadership may change between Step 5 (`is_leader().await` check) and Step 7 (`get()` call)
    - Window is typically ~100ms (one election timeout)
+   - `is_leader()` is async (involves checking openraft's internal state)
+   - `get()` is sync (direct HashMap access with no leadership verification)
    - During this window, an old leader may serve stale reads after losing leadership
    - New leader may not have all committed entries yet
 
@@ -855,13 +1053,13 @@ Step 6:  deleted_count = 0
 
 For each key (key1, key2, key3):
   Step 7:  Create Operation::Del { key }
-  Step 8:  Serialize with bincode
-  Step 9:  Call raft_node.propose(serialized_op)
-  Step 10: RaftNode checks is_leader(). If follower, return NotLeader →
+  Step 8:  Serialize with protobuf: operation.encode_to_vec()
+  Step 9:  Call raft_node.propose(serialized_op).await  // <-- async
+  Step 10: openraft checks leadership internally. If follower, return ForwardToLeader →
            Return RespValue::Integer(deleted_count) with partial count
-  Step 11: RaftNode appends entry to log, replicates via AppendEntries
-  Step 12: Wait for majority commit
-  Step 13: StateMachine::apply() deserializes Operation::Del
+  Step 11: openraft appends entry to log, replicates via AppendEntries
+  Step 12: Wait for majority commit (async)
+  Step 13: StateMachine::apply() deserializes Operation::Del using protobuf
   Step 14: StateMachine calls op.apply(&mut hashmap) → returns b"1" or b"0"
   Step 15: Parse result, add to deleted_count (1 if existed, 0 if not)
 
@@ -887,10 +1085,10 @@ When a client sends a write command to a follower node:
 ```
 Step 1: Client sends SET to follower node
 Step 2: KvService::handle_set validates and creates Operation
-Step 3: Calls raft_node.propose()
-Step 4: RaftNode checks is_leader() → false
-Step 5: RaftNode returns NotLeader error
-Step 6: KvService calls raft_node.leader_id() → Some(1)
+Step 3: Calls raft_node.propose(data).await  // <-- async
+Step 4: openraft checks leadership internally → not leader
+Step 5: openraft returns ForwardToLeader error
+Step 6: KvService calls raft_node.leader_id().await → Some(1)  // <-- async
 Step 7: KvService returns KvServiceError::NotLeader { leader_id: Some(1) }
 Step 8: Error converted to RespValue::Error("-MOVED 1\r\n")
 Step 9: Client receives error, reconnects to leader node 1, retries SET
@@ -952,13 +1150,19 @@ Step 9: Client receives error, reconnects to leader node 1, retries SET
 
 **Async Runtime**: Tokio 1.x for all I/O operations
 
+**OpenRaft Async Integration**:
+- All RaftNode methods that interact with openraft are async
+- `get()` remains sync (direct StateMachine access with RwLock)
+- KvService handlers await on `propose()`, `is_leader()`, `leader_id()`
+- No blocking operations in async contexts
+
 **KvService Cloning**: KvService wraps `Arc<RaftNode>`, is Clone-able, safe to share across tokio tasks
 
 **Raft Node Sharing**: `Arc<RaftNode>` provides thread-safe access to Raft state
 
-**State Machine Locking**: StateMachine uses internal RwLock for concurrent reads, exclusive writes on apply
+**State Machine Locking**: StateMachine uses RwLock for concurrent reads, exclusive writes on apply
 
-**Propose Concurrency**: Multiple concurrent `propose()` calls are safe - Raft serializes them into log order
+**Propose Concurrency**: Multiple concurrent `propose().await` calls are safe - openraft serializes them into log order
 
 **Read Concurrency**: Reads are concurrent-safe via RwLock read locks on StateMachine HashMap
 
@@ -973,6 +1177,25 @@ Step 9: Client receives error, reconnects to leader node 1, retries SET
 **File**: `crates/kv/src/service.rs` (in `#[cfg(test)] mod tests`)
 
 **Approach**: Mock RaftNode using trait-based dependency injection or test doubles
+
+**All tests use #[tokio::test]** for async support:
+
+```rust
+// Example async test structure
+#[tokio::test]
+async fn test_handle_set_validates_key_size() {
+    let kv_service = setup_test_service().await;
+    let result = kv_service.handle_set(vec![0u8; 257], vec![1, 2, 3]).await;
+    assert!(matches!(result, Err(KvServiceError::KeyTooLarge { .. })));
+}
+
+#[tokio::test]
+async fn test_handle_get_on_follower_returns_not_leader() {
+    let kv_service = setup_follower_service().await;
+    let result = kv_service.handle_get(b"foo".to_vec()).await;
+    assert!(matches!(result, Err(KvServiceError::NotLeader { .. })));
+}
+```
 
 **Test Cases**:
 - `test_handle_get_returns_value_when_key_exists`
@@ -996,7 +1219,7 @@ Step 9: Client receives error, reconnects to leader node 1, retries SET
 - `test_handle_ping_no_message_returns_pong`
 - `test_handle_ping_with_message_echoes_back`
 - `test_not_leader_error_includes_leader_id`
-- `test_serialization_error_handling`
+- `test_serialization_error_handling` (with protobuf errors)
 
 ### Integration Tests
 
@@ -1104,19 +1327,24 @@ Step 9: Client receives error, reconnects to leader node 1, retries SET
 
 ## Implementation Dependencies
 
-### Requires (All Complete)
+### Requires (After OpenRaft Migration)
 
-- ✓ `RaftNode::propose()` - DONE (implemented in node.rs)
-- ✓ `RaftNode::get()` - DONE (implemented in node.rs)
-- ✓ `RaftNode::is_leader()` - DONE (implemented in node.rs)
-- ✓ `RaftNode::leader_id()` - DONE (implemented in node.rs)
-- ✓ `Operation::serialize()` - DONE (implemented in operations.rs)
-- ✓ `Operation::deserialize()` - DONE (implemented in operations.rs)
+- ✓ `RaftNode::propose()` → **NOW ASYNC**: `async fn propose(&self, data: Vec<u8>) -> Result<ClientWriteResponse>`
+- ✓ `RaftNode::get()` → **STILL SYNC**: `fn get(&self, key: &[u8]) -> Option<Vec<u8>>`
+- ✓ `RaftNode::is_leader()` → **NOW ASYNC**: `async fn is_leader(&self) -> bool`
+- ✓ `RaftNode::leader_id()` → **NOW ASYNC**: `async fn leader_id(&self) -> Option<u64>`
+- ✓ `Operation::encode_to_vec()` - Protobuf serialization (replaces bincode)
+- ✓ `Operation::decode()` - Protobuf deserialization (replaces bincode)
 - ✓ `RespCommand` and `RespValue` - DONE (protocol-resp crate complete)
 
 ### Blockers
 
-**None** - All required Raft functionality is implemented. Can begin KvService implementation immediately.
+**OpenRaft migration MUST be complete** before KV Service implementation begins. Specifically:
+- OpenRaft Phase 1-6 complete (see `docs/specs/openraft/`)
+- RaftNode API migrated to openraft async methods
+- StateMachine integrated with openraft
+- All raft crate tests passing with openraft
+- Protobuf serialization implemented for Operations
 
 ### Provides
 
@@ -1159,7 +1387,10 @@ OpenTelemetry metrics for production (not Phase 1):
 
 **Read Consistency - Leadership Transition Race**:
 - Reads may be stale during leadership transitions (window of ~100ms)
-- While KvService checks `is_leader()` before reads, leadership can change before `get()` completes
+- While KvService checks `is_leader().await` before reads, leadership can change before `get()` completes
+- `is_leader()` is async (checks openraft state)
+- `get()` is sync (direct StateMachine HashMap access, no internal leadership check)
+- **Race window**: Between `is_leader().await` returning true and `get()` executing
 - Old leader may serve reads briefly after losing leadership
 - New leader may not have all committed entries immediately after election
 - Clients may observe "time travel": newer value → older value → newer value

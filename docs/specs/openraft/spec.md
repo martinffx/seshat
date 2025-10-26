@@ -23,9 +23,10 @@ As a **Seshat developer**, I want to **migrate from raft-rs to openraft** so tha
 
 1. **Primary Migration Motivation** - Must eliminate prost version conflicts between raft library (0.11) and transport layer (0.14)
 2. **Storage Design** - Must maintain existing MemStorage in-memory design (no persistent storage implementation)
-3. **Observability Continuity** - Must maintain existing logging and observability patterns using tracing crate with structured logging
-4. **Transport Stub** - Transport layer should have stub/placeholder implementation for future gRPC integration
-5. **No KV Integration** - No integration with KV service layer in this phase - focus on core migration only
+3. **Serialization Strategy** - Use protobuf (prost) for all serialization (storage + network) - single format throughout, same as network layer
+4. **Observability Continuity** - Must maintain existing logging and observability patterns using tracing crate with structured logging
+5. **Transport Stub** - Transport layer should have stub/placeholder implementation for future gRPC integration
+6. **No KV Integration** - No integration with KV service layer in this phase - focus on core migration only
 
 ## Scope
 
@@ -36,9 +37,11 @@ As a **Seshat developer**, I want to **migrate from raft-rs to openraft** so tha
 3. Migrate state machine from raft-rs RawNode API to openraft API
 4. Update RaftNode wrapper to use `openraft::Raft` instead of `raft::RawNode`
 5. Remove prost 0.11 dependency and standardize on prost 0.14 throughout codebase
-6. Update all unit tests in raft crate to work with openraft APIs
-7. Add stub/placeholder for network transport (RaftNetwork trait)
-8. Add tracing instrumentation for openraft operations (leader election, log replication)
+6. **Define protobuf schemas** for storage types (LogEntry, HardState, Snapshot metadata) - use prost for encoding/decoding
+7. **Remove bincode dependency** entirely - replaced by protobuf for all serialization
+8. Update all unit tests in raft crate to work with openraft APIs
+9. Add stub/placeholder for network transport (RaftNetwork trait)
+10. Add tracing instrumentation for openraft operations (leader election, log replication)
 
 ### Excluded
 
@@ -114,8 +117,13 @@ As a **Seshat developer**, I want to **migrate from raft-rs to openraft** so tha
 1. **seshat-storage** - MemStorage in-memory implementation
 2. **seshat-common** - Shared types (NodeId, Error)
 3. **openraft** (external) - Raft consensus library to replace raft-rs
-4. **tokio 1.x** - Async runtime
-5. **tracing** - Structured logging for observability
+4. **prost 0.14** - Protobuf serialization for storage and network (unified format)
+5. **tokio 1.x** - Async runtime
+6. **tracing** - Structured logging for observability
+
+**Dependencies to REMOVE:**
+- **bincode** - Replaced by protobuf for all serialization
+- **raft-rs 0.7** - Replaced by openraft
 
 ## Conflicts & Resolution
 

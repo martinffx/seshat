@@ -65,17 +65,19 @@ As a Seshat node operator, I want persistent storage using RocksDB so that the c
 ### Depends On
 - common crate - shared types (Error, Result, configuration structs)
 - rocksdb crate - underlying storage engine (v0.22+)
-- bincode crate - efficient binary serialization
+- prost crate - protobuf serialization for all storage operations
 - serde crate - serialization trait implementations
 - thiserror crate - error type definitions
+- openraft migration (BLOCKING) - must complete OpenRaft Phase 1-2 before RocksDB storage implementation
+- async-trait crate - for async trait implementations
 
 ### Used By
-- raft crate - implements raft-rs Storage trait using this storage layer
+- raft crate - provides OpenRaftMemStorage wrapper that implements openraft storage traits
 - kv crate - indirectly via raft crate for persisting key-value operations
 - seshat binary - orchestrates initialization and lifecycle
 
 ### Integration Points
-- raft-rs Storage trait - storage layer must provide: append entries, get entries, snapshot, apply snapshot, hard state persistence
+- openraft storage traits - storage layer must provide: RaftLogReader, RaftSnapshotBuilder, RaftStorage (openraft version)
 - common::types - all data structures defined in data-structures.md
 - config loading - NodeConfig specifies data_dir path for RocksDB
 
@@ -86,42 +88,42 @@ As a Seshat node operator, I want persistent storage using RocksDB so that the c
 1. system_raft_log
    - Purpose: System group Raft log entries
    - Key Format: log:{index}
-   - Value Type: VersionedLogEntry (bincode)
+   - Value Type: LogEntry (protobuf via prost)
    - Size: ~10MB compacted
    - Compaction: Truncate after snapshot
 
 2. system_raft_state
    - Purpose: System group hard state
    - Key Format: state (single key)
-   - Value Type: RaftHardState (bincode)
+   - Value Type: RaftHardState (protobuf via prost)
    - Size: <1KB
    - Durability: fsync required before RPC responses
 
 3. system_data
    - Purpose: Cluster metadata
    - Key Format: membership, shardmap
-   - Value Type: ClusterMembership, ShardMap (bincode)
+   - Value Type: ClusterMembership, ShardMap (protobuf via prost)
    - Size: ~100KB bounded
    - Compaction: Automatic by RocksDB
 
 4. data_raft_log
    - Purpose: Data shard Raft log entries
    - Key Format: log:{index}
-   - Value Type: VersionedLogEntry (bincode)
+   - Value Type: LogEntry (protobuf via prost)
    - Size: ~100MB compacted
    - Compaction: Snapshot every 10,000 entries or 100MB
 
 5. data_raft_state
    - Purpose: Data shard hard state
    - Key Format: state (single key)
-   - Value Type: RaftHardState (bincode)
+   - Value Type: RaftHardState (protobuf via prost)
    - Size: <1KB
    - Durability: fsync required before RPC responses
 
 6. data_kv
    - Purpose: User key-value data
    - Key Format: raw user key (arbitrary bytes)
-   - Value Type: StoredValue (bincode)
+   - Value Type: StoredValue (protobuf via prost)
    - Size: Unbounded (user data)
    - Optimization: Prefix bloom filters for point lookups
 
@@ -136,3 +138,10 @@ As a Seshat node operator, I want persistent storage using RocksDB so that the c
 ## Alignment
 
 This feature aligns with Phase 1 MVP - Persistent storage foundation for single-shard cluster. Enables cluster recovery after restarts, provides durability for Raft consensus, and stores user key-value data. Critical blocker for 3-node cluster stability testing.
+
+## Estimated Effort
+
+**14-17 hours** total implementation time:
+- +2 hours for openraft trait integration complexity
+- Async trait implementation overhead
+- Testing with openraft types

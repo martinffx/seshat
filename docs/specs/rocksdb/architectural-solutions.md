@@ -259,9 +259,8 @@ impl RaftStorageAdapter {
         let cf = self.log_cf();
 
         for entry in entries {
-            // SERIALIZATION HAPPENS HERE in raft crate
-            let entry_bytes = bincode::serialize(&entry)
-                .map_err(|e| RaftError::Serialization(e.to_string()))?;
+            // SERIALIZATION HAPPENS HERE in raft crate using protobuf
+            let entry_bytes = entry.encode_to_vec();
 
             // Storage receives pure bytes
             self.storage.append_log_entry(cf, entry.index, &entry_bytes)?;
@@ -277,11 +276,11 @@ impl RaftStorageAdapter {
         // Storage returns pure bytes
         let entry_bytes_vec = self.storage.get_log_range(cf, start, end)?;
 
-        // DESERIALIZATION HAPPENS HERE in raft crate
+        // DESERIALIZATION HAPPENS HERE in raft crate using protobuf
         let entries = entry_bytes_vec
             .into_iter()
             .map(|bytes| {
-                bincode::deserialize::<VersionedLogEntry>(&bytes)
+                VersionedLogEntry::decode(&bytes[..])
                     .map_err(|e| RaftError::Deserialization(e.to_string()))
             })
             .collect::<Result<Vec<_>>>()?;
@@ -293,9 +292,8 @@ impl RaftStorageAdapter {
     pub async fn save_hard_state(&self, hard_state: RaftHardState) -> Result<()> {
         let cf = self.state_cf();
 
-        // SERIALIZATION HAPPENS HERE
-        let bytes = bincode::serialize(&hard_state)
-            .map_err(|e| RaftError::Serialization(e.to_string()))?;
+        // SERIALIZATION HAPPENS HERE using protobuf
+        let bytes = hard_state.encode_to_vec();
 
         // Storage receives pure bytes, handles fsync automatically
         self.storage.put(cf, b"state", &bytes)?;
@@ -312,9 +310,9 @@ impl RaftStorageAdapter {
 
         match bytes {
             Some(b) => {
-                // DESERIALIZATION HAPPENS HERE
-                let state = bincode::deserialize::<RaftHardState>(&b)
-                    .map_err(|e| RaftError::Deserialization(e.to_string()))?;
+                // DESERIALIZATION HAPPENS HERE using protobuf
+                let state = RaftHardState::decode(&b[..])
+                .map_err(|e| RaftError::Deserialization(e.to_string()))?;
                 Ok(Some(state))
             }
             None => Ok(None),
@@ -388,15 +386,15 @@ seshat-raft (crates/raft)
 │   ├── seshat-storage (local)
 │   ├── seshat-common (local)
 │   ├── openraft = "0.10"
-│   ├── bincode = "1.3"
+│   ├── prost = "0.12"
 │   ├── serde = { version = "1.0", features = ["derive"] }
 │   └── tokio = { version = "1", features = ["full"] }
 
 seshat-common (crates/common)
 ├── Dependencies:
+│   ├── prost = "0.12"
 │   ├── serde = { version = "1.0", features = ["derive"] }
-│   ├── thiserror = "1.0"
-│   └── bincode = "1.3"
+│   └── thiserror = "1.0"
 ```
 
 #### 6. Testing Strategy for Boundaries
