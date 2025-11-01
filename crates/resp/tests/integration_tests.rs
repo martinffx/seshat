@@ -10,7 +10,7 @@
 
 use bytes::{BufMut, Bytes, BytesMut};
 use futures::{SinkExt, StreamExt};
-use seshat_protocol_resp::{RespCodec, RespCommand, RespValue};
+use seshat_resp::{RespCodec, RespCommand, RespValue};
 use std::io;
 use tokio::net::{TcpListener, TcpStream};
 use tokio_util::codec::{Decoder, Framed};
@@ -629,10 +629,10 @@ async fn test_parse_encode_roundtrip_all_commands() {
 
         // Encode back to bytes and verify roundtrip
         let mut buf = BytesMut::new();
-        seshat_protocol_resp::RespEncoder::encode(&value, &mut buf).unwrap();
+        seshat_resp::RespEncoder::encode(&value, &mut buf).unwrap();
 
         // Parse back
-        let mut parser = seshat_protocol_resp::RespParser::new();
+        let mut parser = seshat_resp::RespParser::new();
         let parsed = parser.parse(&mut buf).unwrap().unwrap();
         assert_eq!(parsed, value);
     }

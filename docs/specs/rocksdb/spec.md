@@ -63,23 +63,27 @@ As a Seshat node operator, I want persistent storage using RocksDB so that the c
 ## Dependencies
 
 ### Depends On
-- common crate - shared types (Error, Result, configuration structs)
-- rocksdb crate - underlying storage engine (v0.22+)
-- prost crate - protobuf serialization for all storage operations
-- serde crate - serialization trait implementations
-- thiserror crate - error type definitions
-- openraft migration (BLOCKING) - must complete OpenRaft Phase 1-2 before RocksDB storage implementation
-- async-trait crate - for async trait implementations
+- **seshat-storage crate** - RaftTypeConfig, Operation types, OpenRaft trait definitions
+- **rocksdb crate** - underlying storage engine (v0.22+)
+- **bincode crate** - serialization for state machine data
+- **serde crate** - serialization trait implementations
+- **thiserror crate** - error type definitions
+- **openraft 0.9 migration** (✅ COMPLETE) - Phase 2 complete, split storage-v2 API implemented
+- **async-trait crate** - for async trait implementations
 
 ### Used By
-- raft crate - provides OpenRaftMemStorage wrapper that implements openraft storage traits
-- kv crate - indirectly via raft crate for persisting key-value operations
-- seshat binary - orchestrates initialization and lifecycle
+- **seshat-storage crate** - Will use OpenRaftRocksDBLog and OpenRaftRocksDBStateMachine
+- **seshat-kv crate** - Indirectly via seshat-storage for persisting operations
+- **seshat binary** - Orchestrates initialization and lifecycle
 
-### Integration Points
-- openraft storage traits - storage layer must provide: RaftLogReader, RaftSnapshotBuilder, RaftStorage (openraft version)
-- common::types - all data structures defined in data-structures.md
-- config loading - NodeConfig specifies data_dir path for RocksDB
+### Integration Points (OpenRaft 0.9 storage-v2)
+- **RaftLogStorage trait** - Implemented by OpenRaftRocksDBLog (log entries, vote storage)
+- **RaftStateMachine trait** - Implemented by OpenRaftRocksDBStateMachine (state operations, snapshots)
+- **RaftSnapshotBuilder trait** - Implemented by OpenRaftRocksDBSnapshotBuilder
+- **Column Families** - Map to split storage traits:
+  - `data_raft_log` + `data_raft_state` → RaftLogStorage
+  - `data_kv` → RaftStateMachine
+- **Config loading** - NodeConfig specifies data_dir path for RocksDB
 
 ## Technical Details
 

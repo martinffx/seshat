@@ -85,8 +85,8 @@ impl RespCommand {
     /// # Examples
     ///
     /// ```
-    /// use seshat_protocol_resp::command::RespCommand;
-    /// use seshat_protocol_resp::types::RespValue;
+    /// use seshat_resp::command::RespCommand;
+    /// use seshat_resp::types::RespValue;
     /// use bytes::Bytes;
     ///
     /// let value = RespValue::Array(Some(vec![
