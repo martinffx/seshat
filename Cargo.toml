@@ -2,11 +2,9 @@
 resolver = "2"
 members = [
     "crates/seshat",
-    "crates/raft",
     "crates/storage",
-    "crates/protocol-resp",
+    "crates/resp",
     "crates/kv",
-    "crates/common",
 ]
 
 [workspace.package]

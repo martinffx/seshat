@@ -9,8 +9,6 @@ description = "Key-value service implementation for Seshat"
 keywords.workspace = true
 
 [dependencies]
-serde = { workspace = true }
-bincode = { workspace = true }
-thiserror = { workspace = true }
+seshat-storage = { path = "../storage" }
 
 [dev-dependencies]
