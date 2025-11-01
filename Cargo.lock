@@ -1360,7 +1360,13 @@ version = "0.1.0"
 name = "seshat-kv"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "async-trait",
+ "openraft",
  "seshat-storage",
+ "thiserror",
+ "tokio",
+ "tokio-test",
 ]
 
 [[package]]

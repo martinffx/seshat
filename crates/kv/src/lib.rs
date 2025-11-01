@@ -1,13 +1,14 @@
 //! Key-value service for Seshat distributed store
 //!
 //! This crate provides the key-value service implementation, including
-//! business logic for Redis-compatible commands.
+//! business logic for Redis-compatible commands and Raft integration.
 //!
 //! # Architecture
 //!
 //! The KV layer handles:
 //! - **Service Logic**: Command routing and validation (future)
 //! - **Redis Compatibility**: Implement Redis command semantics
+//! - **Raft Integration**: Propose operations to Raft cluster via RaftNode
 //!
 //! Operations (Set, Del) are defined in seshat-storage.
 //!
@@ -28,3 +29,9 @@
 
 // Re-export Operation types from seshat-storage
 pub use seshat_storage::{Operation, OperationError, OperationResult};
+
+// Raft node integration module
+pub mod raft_node;
+
+// Re-export RaftNode for convenience
+pub use raft_node::{RaftNode, RaftNodeError};

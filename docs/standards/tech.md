@@ -5,10 +5,10 @@
 ### Core Dependencies
 - **Language**: Rust 1.90+ (2021 edition)
 - **Async Runtime**: tokio 1.x (full features)
-- **Consensus**: raft-rs 0.7+
-- **Storage**: RocksDB 0.22+ (via rocksdb crate)
-- **RPC Framework**: gRPC (tonic 0.11+ / prost 0.12+)
-- **Serialization**: Protobuf (prost 0.12+) for all serialization (internal RPC and storage)
+- **Consensus**: OpenRaft 0.9+ (migrated from raft-rs 0.7)
+- **Storage**: RocksDB 0.22+ (via rocksdb crate) - **Currently in-memory for Phase 1**
+- **RPC Framework**: gRPC (tonic 0.11+ / prost 0.12+) - **Stub network for Phase 1**
+- **Serialization**: bincode for operations, Protobuf (prost 0.12+) planned for internal RPC
 - **Error Handling**: thiserror (libraries), anyhow (binary)
 - **Logging**: tracing + tracing-subscriber
 - **Testing**: proptest (property tests), tokio-test
@@ -16,10 +16,14 @@
 
 ### Dependency Rationale
 
-**Why raft-rs?**
-- Production-tested Raft implementation
-- Flexible Storage trait for custom backends
-- Used by TiKV and other distributed systems
+**Why OpenRaft?** (Migrated Jan 2025)
+- Production-tested Raft implementation with active maintenance
+- Clean async API (fully async/await, no blocking calls)
+- Flexible Storage-v2 trait for custom backends
+- Better documentation and examples than raft-rs
+- Active development and bug fixes
+- Type-safe log storage with `RaftLogStorage` and `RaftStateMachine` separation
+- **Migration reason**: raft-rs development has slowed; OpenRaft provides better ergonomics
 
 **Why RocksDB?**
 - Embedded key-value store (no separate process)
@@ -27,11 +31,12 @@
 - Excellent write performance
 - Snapshot support for log compaction
 
-**Why gRPC/tonic?**
+**Why gRPC/tonic?** (Planned for Phase 2+)
 - Efficient binary protocol (Protobuf)
 - HTTP/2 connection multiplexing
 - Streaming support for large snapshots
 - Good Rust ecosystem support
+- **Phase 1 status**: Using StubNetwork for single-node testing; gRPC planned for multi-node clusters
 
 **Why OpenTelemetry?** (Phase 4)
 - Vendor-neutral observability

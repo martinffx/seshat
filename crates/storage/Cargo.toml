@@ -8,6 +8,10 @@ repository.workspace = true
 description.workspace = true
 keywords.workspace = true
 
+[features]
+# Feature to enable disabled tests (tests that require OpenRaft internal APIs)
+disabled_tests = []
+
 [dependencies]
 # OpenRaft for consensus
 openraft = { version = "0.9", features = ["storage-v2"] }

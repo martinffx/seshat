@@ -9,6 +9,21 @@ description = "Key-value service implementation for Seshat"
 keywords.workspace = true
 
 [dependencies]
+# Storage layer with OpenRaft integration
 seshat-storage = { path = "../storage" }
 
+# OpenRaft for consensus
+openraft = { version = "0.9", features = ["storage-v2"] }
+
+# Async runtime
+tokio = { workspace = true }
+
+# Async traits
+async-trait = "0.1"
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
 [dev-dependencies]
+tokio-test = { workspace = true }
