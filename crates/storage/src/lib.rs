@@ -1,44 +1,71 @@
-//! In-memory storage implementation for Raft consensus.
+//! Storage implementations for Seshat distributed KV store.
 //!
-//! This module provides `MemStorage`, an in-memory implementation suitable for
-//! testing and development. For production use, a persistent storage backend
-//! (e.g., RocksDB) should be used instead.
-//!
-//! # Protobuf Version Bridging
-//!
-//! This module uses `prost_old` (prost 0.11) to maintain compatibility with `raft-rs`,
-//! which depends on prost 0.11. Our transport layer uses the latest prost 0.14 for
-//! gRPC communication with tonic 0.14. The bridging happens in the transport layer
-//! via binary serialization/deserialization.
-//!
-//! - `prost_old` (0.11): Used here for raft-rs `eraftpb` types (Entry, HardState, etc.)
-//! - `prost` (0.14): Used in transport layer for gRPC wire protocol
-//!
-//! # Thread Safety
-//!
-//! All fields are wrapped in `RwLock` to provide thread-safe concurrent access.
-//! Multiple readers can access the data simultaneously, but writers have exclusive access.
-//!
-//! ## Lock Poisoning Philosophy
-//!
-//! This implementation uses `.expect()` instead of `.unwrap()` for lock acquisition
-//! to provide clear error messages when lock poisoning occurs. Lock poisoning indicates
-//! that a thread panicked while holding the lock, leaving the data in a potentially
-//! inconsistent state.
-//!
-//! **For Phase 1 (MemStorage)**: Lock poisoning is considered a serious bug that should
-//! cause the application to panic immediately with a descriptive message. This approach
-//! is acceptable because:
-//! 1. MemStorage is used for testing and single-node scenarios
-//! 2. Lock poisoning indicates a critical bug in the concurrent access logic
-//! 3. Continuing with poisoned state would lead to data corruption
-//!
-//! **For Future Production Storage (RocksDB)**: Lock poisoning should be handled gracefully
-//! by returning a proper error through the Raft error system, allowing the node to
-//! potentially recover or fail safely without cascading panics.
-//!
-//! The `.expect()` messages clearly identify which lock failed, making debugging easier
-//! during development and testing.
+//! This crate provides:
+//! - OpenRaft type configuration and core types
+//! - Operation definitions for state machine commands
+//! - In-memory storage backend (OpenRaftMemStorage)
+//! - State machine for applying operations
+//! - RocksDB storage backend (future)
+
+// OpenRaft types and configuration
+pub mod openraft_mem;
+pub mod operations;
+pub mod state_machine;
+pub mod types;
+
+// Re-export commonly used types
+pub use openraft_mem::{
+    OpenRaftMemLog, OpenRaftMemLogReader, OpenRaftMemSnapshotBuilder, OpenRaftMemStateMachine,
+};
+pub use operations::{Operation, OperationError, OperationResult};
+pub use state_machine::StateMachine;
+pub use types::{BasicNode, RaftTypeConfig, Request, Response};
+
+// ============================================================================
+// Legacy raft-rs storage (will be removed after OpenRaft migration)
+// ============================================================================
+
+// In-memory storage implementation for Raft consensus.
+//
+// This module provides `MemStorage`, an in-memory implementation suitable for
+// testing and development. For production use, a persistent storage backend
+// (e.g., RocksDB) should be used instead.
+//
+// # Protobuf Version Bridging
+//
+// This module uses `prost_old` (prost 0.11) to maintain compatibility with `raft-rs`,
+// which depends on prost 0.11. Our transport layer uses the latest prost 0.14 for
+// gRPC communication with tonic 0.14. The bridging happens in the transport layer
+// via binary serialization/deserialization.
+//
+// - `prost_old` (0.11): Used here for raft-rs `eraftpb` types (Entry, HardState, etc.)
+// - `prost` (0.14): Used in transport layer for gRPC wire protocol
+//
+// # Thread Safety
+//
+// All fields are wrapped in `RwLock` to provide thread-safe concurrent access.
+// Multiple readers can access the data simultaneously, but writers have exclusive access.
+//
+// ## Lock Poisoning Philosophy
+//
+// This implementation uses `.expect()` instead of `.unwrap()` for lock acquisition
+// to provide clear error messages when lock poisoning occurs. Lock poisoning indicates
+// that a thread panicked while holding the lock, leaving the data in a potentially
+// inconsistent state.
+//
+// **For Phase 1 (MemStorage)**: Lock poisoning is considered a serious bug that should
+// cause the application to panic immediately with a descriptive message. This approach
+// is acceptable because:
+// 1. MemStorage is used for testing and single-node scenarios
+// 2. Lock poisoning indicates a critical bug in the concurrent access logic
+// 3. Continuing with poisoned state would lead to data corruption
+//
+// **For Future Production Storage (RocksDB)**: Lock poisoning should be handled gracefully
+// by returning a proper error through the Raft error system, allowing the node to
+// potentially recover or fail safely without cascading panics.
+//
+// The `.expect()` messages clearly identify which lock failed, making debugging easier
+// during development and testing.
 
 use prost_old::Message;
 use raft::eraftpb::{ConfState, Entry, HardState, Snapshot};

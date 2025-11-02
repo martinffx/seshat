@@ -7,31 +7,33 @@
 This is a **pure persistence layer** - NOT the standard Router → Service → Repository pattern used for web APIs. The storage crate provides a low-level abstraction over RocksDB with no business logic.
 
 ```
-┌─────────────────────────────────────┐
-│   Raft Crate (OpenRaftMemStorage)      │
-│   - Implements openraft storage traits │
-│   - RaftLogReader, RaftSnapshotBuilder │
-│   - RaftStorage (openraft version)    │
-└─────────────────────────────────────┘
-                 │
-                 │ Uses Storage methods
-                 ▼
-┌─────────────────────────────────────┐
-│   Storage Crate (Storage struct)    │
-│   - Column family management        │
-│   - Atomic batch writes             │
-│   - Snapshot creation/restoration   │
-│   - Thread-safe RocksDB access      │
-└─────────────────────────────────────┘
-                 │
-                 │ Wraps RocksDB API
-                 ▼
-┌─────────────────────────────────────┐
-│   RocksDB (Arc<DB>)                 │
-│   - 6 column families               │
-│   - WAL with fsync control          │
-│   - LSM tree compaction             │
-└─────────────────────────────────────┘
+┌──────────────────────────────────────────┐
+│   seshat-storage Crate                   │
+│   - OpenRaftRocksDBLog (RaftLogStorage)  │
+│   - OpenRaftRocksDBStateMachine          │
+│   - OpenRaftRocksDBSnapshotBuilder       │
+└──────────────────────────────────────────┘
+                    │
+                    │ Uses Column Families
+                    ▼
+┌──────────────────────────────────────────┐
+│   RocksDB Storage Layer                  │
+│   - Column family management             │
+│   - Atomic batch writes                  │
+│   - Snapshot creation/restoration        │
+│   - Thread-safe RocksDB access (Arc<DB>) │
+└──────────────────────────────────────────┘
+                    │
+                    │ Maps traits to CFs:
+                    │ - RaftLogStorage → data_raft_log + data_raft_state
+                    │ - RaftStateMachine → data_kv
+                    ▼
+┌──────────────────────────────────────────┐
+│   RocksDB (Arc<DB>)                      │
+│   - 6 column families                    │
+│   - WAL with fsync control               │
+│   - LSM tree compaction                  │
+└──────────────────────────────────────────┘
 ```
 
 **Key Principle**: Storage layer stores bytes as directed - it has NO understanding of Raft semantics, business logic, or protocol parsing.

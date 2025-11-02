@@ -21,8 +21,8 @@
 //! # Examples
 //!
 //! ```
-//! use seshat_protocol_resp::inline::InlineCommandParser;
-//! use seshat_protocol_resp::RespValue;
+//! use seshat_resp::inline::InlineCommandParser;
+//! use seshat_resp::RespValue;
 //!
 //! // Basic command
 //! let result = InlineCommandParser::parse(b"GET mykey\r\n").unwrap();
@@ -72,7 +72,7 @@ impl InlineCommandParser {
     /// # Examples
     ///
     /// ```
-    /// use seshat_protocol_resp::inline::InlineCommandParser;
+    /// use seshat_resp::inline::InlineCommandParser;
     ///
     /// let result = InlineCommandParser::parse(b"GET key\r\n").unwrap();
     /// ```

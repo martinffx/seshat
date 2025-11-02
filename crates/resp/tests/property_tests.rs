@@ -7,7 +7,7 @@
 
 use bytes::{Bytes, BytesMut};
 use proptest::prelude::*;
-use seshat_protocol_resp::{RespEncoder, RespParser, RespValue};
+use seshat_resp::{RespEncoder, RespParser, RespValue};
 
 // ============================================================================
 // PROPERTY GENERATORS

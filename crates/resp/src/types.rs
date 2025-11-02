@@ -97,7 +97,7 @@ impl RespValue {
     /// # Examples
     ///
     /// ```
-    /// use seshat_protocol_resp::types::RespValue;
+    /// use seshat_resp::types::RespValue;
     ///
     /// assert!(RespValue::Null.is_null());
     /// assert!(RespValue::BulkString(None).is_null());
@@ -126,7 +126,7 @@ impl RespValue {
     /// # Examples
     ///
     /// ```
-    /// use seshat_protocol_resp::types::RespValue;
+    /// use seshat_resp::types::RespValue;
     /// use bytes::Bytes;
     ///
     /// let value = RespValue::SimpleString(Bytes::from("OK"));
@@ -154,7 +154,7 @@ impl RespValue {
     /// # Examples
     ///
     /// ```
-    /// use seshat_protocol_resp::types::RespValue;
+    /// use seshat_resp::types::RespValue;
     ///
     /// let value = RespValue::Integer(1000);
     /// assert_eq!(value.as_integer(), Some(1000));
@@ -176,7 +176,7 @@ impl RespValue {
     /// # Examples
     ///
     /// ```
-    /// use seshat_protocol_resp::types::RespValue;
+    /// use seshat_resp::types::RespValue;
     /// use bytes::Bytes;
     ///
     /// let value = RespValue::Array(Some(vec![
@@ -202,7 +202,7 @@ impl RespValue {
     /// # Examples
     ///
     /// ```
-    /// use seshat_protocol_resp::types::RespValue;
+    /// use seshat_resp::types::RespValue;
     /// use bytes::Bytes;
     ///
     /// let value = RespValue::SimpleString(Bytes::from("OK"));
