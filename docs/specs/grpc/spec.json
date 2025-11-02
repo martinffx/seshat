@@ -1,0 +1,112 @@
+{
+  "feature": "grpc",
+  "user_story": "As a Raft node, I want to communicate with other nodes over gRPC so that I can participate in leader election, log replication, and consensus operations",
+  "acceptance_criteria": [
+    "GIVEN a 3-node cluster, WHEN node 1 sends RequestVote RPC to node 2, THEN node 2 receives the message, processes it, and returns a vote response within 10 seconds",
+    "GIVEN a leader node, WHEN it sends AppendEntries RPC to a follower, THEN the follower receives log entries, persists them, and acknowledges within 10 seconds",
+    "GIVEN a new node joining the cluster, WHEN the leader sends InstallSnapshot RPC, THEN the node receives snapshot chunks up to 10MB and applies them successfully",
+    "GIVEN network failure between nodes, WHEN gRPC connection fails, THEN the error is propagated to openraft layer with proper RaftError type",
+    "GIVEN multiple concurrent RPCs, WHEN nodes send messages simultaneously, THEN all messages are processed without blocking each other",
+    "GIVEN a connection timeout of 5 seconds, WHEN a peer is unreachable, THEN the client fails the request within 5 seconds and retries up to 3 times with exponential backoff",
+    "GIVEN protobuf serialization, WHEN messages are sent over the wire, THEN they are efficiently encoded/decoded using prost 0.14"
+  ],
+  "business_rules": [
+    "gRPC server MUST run on port 7379 (internal Raft RPC, distinct from port 6379 for client RESP protocol)",
+    "Connection timeout MUST be 5 seconds",
+    "Request timeout MUST be 10 seconds for RequestVote and AppendEntries",
+    "Request timeout MUST be 30 seconds for InstallSnapshot (larger snapshots need more time)",
+    "Maximum message size MUST be 10MB to support snapshot chunks",
+    "Retry logic MUST use exponential backoff with maximum 3 attempts",
+    "TLS/mTLS is OPTIONAL in Phase 1, will become REQUIRED in Phase 4",
+    "All version dependencies MUST use prost 0.14 (matches tonic 0.11 requirement)",
+    "Connection pool MUST maintain HashMap<NodeId, GrpcClient> for peer connections",
+    "Peer discovery MUST use DNS-based hostname:port format",
+    "Error handling MUST map tonic::Status to openraft RaftError types"
+  ],
+  "scope": {
+    "included": [
+      "gRPC service definition for Raft RPC messages (RequestVote, AppendEntries, InstallSnapshot)",
+      "Server implementation for receiving Raft messages on port 7379",
+      "Client implementation for sending messages to peers",
+      "Implementation of openraft::RaftNetwork<RaftTypeConfig> trait",
+      "Connection pooling and lifecycle management (HashMap<NodeId, GrpcClient>)",
+      "Error handling with proper tonic::Status to RaftError mapping",
+      "Retry logic with exponential backoff (max 3 attempts)",
+      "Protocol Buffers schema definitions in crates/raft/proto/",
+      "Integration with storage crate for state persistence",
+      "Unit tests for protobuf serialization/deserialization",
+      "Integration tests for 2-node message exchange",
+      "Replacement of StubNetwork placeholder with OpenRaftNetwork"
+    ],
+    "excluded": [
+      "TLS/mTLS authentication (deferred to Phase 4)",
+      "Load balancing across multiple endpoints (not needed for fixed 3-node cluster)",
+      "Streaming for large snapshots (optimization for later phases)",
+      "Metrics/observability (deferred to Phase 4)",
+      "Dynamic cluster membership (Phase 3)",
+      "Client-facing RESP protocol (handled by protocol-resp crate)"
+    ]
+  },
+  "aligns_with": "Phase 1 goal of building a 3-node distributed Redis-compatible KV store with Raft consensus. The gRPC implementation enables internal node-to-node communication on port 7379, separate from client-facing RESP on port 6379. This directly supports the success criteria of leader election <2s and passing 11 chaos tests.",
+  "dependencies": [
+    "openraft crate 0.10+ for RaftNetwork trait and type config",
+    "storage crate for state persistence (log entries, snapshots)",
+    "common crate for shared types (NodeId, ClusterId)",
+    "tonic 0.11+ for gRPC server/client implementation",
+    "prost 0.14+ for Protocol Buffers serialization (MUST match tonic version)",
+    "tokio async runtime for connection management",
+    "thiserror for error type definitions",
+    "tracing for structured logging"
+  ],
+  "conflicts": [
+    {
+      "issue": "Port number mismatch",
+      "details": "Raw requirements specified port 50051, but project context requires port 7379 for internal Raft RPC",
+      "resolution": "Use port 7379 per project architecture standards"
+    },
+    {
+      "issue": "Timeout value clarity",
+      "details": "InstallSnapshot needs longer timeout than standard 10s due to large message size",
+      "resolution": "Added specific 30s timeout rule for InstallSnapshot operations"
+    }
+  ],
+  "technical_details": {
+    "port": 7379,
+    "protocol": "gRPC with tonic 0.11+ / prost 0.14+",
+    "rpc_types": [
+      "RequestVote (leader election)",
+      "AppendEntries (log replication)",
+      "InstallSnapshot (snapshot transfer)"
+    ],
+    "replaces": "StubNetwork placeholder from openraft migration spec",
+    "implements_trait": "openraft::RaftNetwork<RaftTypeConfig>",
+    "file_structure": {
+      "proto_definitions": "crates/raft/proto/raft.proto",
+      "server_impl": "crates/raft/src/grpc_server.rs",
+      "client_impl": "crates/raft/src/grpc_client.rs",
+      "network_layer": "crates/raft/src/network.rs (replaces network_stub.rs)"
+    },
+    "connection_strategy": {
+      "pooling": "HashMap<NodeId, GrpcClient>",
+      "discovery": "DNS-based hostname:port",
+      "retry": "Exponential backoff, max 3 attempts"
+    },
+    "error_mapping": "tonic::Status -> openraft::error::RaftError",
+    "async_runtime": "tokio",
+    "testing_strategy": {
+      "unit_tests": "Protobuf serialization, client/server initialization",
+      "integration_tests": "2-node message exchange scenarios",
+      "chaos_tests": "Included in 11 chaos test suite (network partitions, failures)"
+    }
+  },
+  "validation_notes": [
+    "User story properly formatted with actor (Raft node), action (communicate over gRPC), and benefit (participate in consensus)",
+    "All acceptance criteria converted to testable GIVEN/WHEN/THEN format",
+    "Business rules aligned with project standards (port 7379, prost 0.14, 5s timeout)",
+    "Port conflict resolved (50051 -> 7379 per architecture)",
+    "Scope clarified to exclude Phase 4 features (TLS, metrics)",
+    "Dependencies explicitly list version constraints to avoid compatibility issues",
+    "Technical details reference specific file locations and trait implementations",
+    "Ready for /spec:design phase to generate detailed technical design"
+  ]
+}
