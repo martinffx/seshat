@@ -459,12 +459,8 @@ impl RaftStateMachine<crate::RaftTypeConfig> for OpenRaftMemStateMachine {
 //
 // TOTAL COVERAGE: 93 tests validate storage layer functionality
 //
-// To re-enable these tests (requires OpenRaft internal API access):
-// - Run: cargo test -p seshat-storage --features disabled_tests
-// - Note: Tests will fail due to API incompatibility
-//
 // =============================================================================
-#[cfg(all(test, feature = "disabled_tests"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::{Operation, Request};
@@ -515,25 +511,8 @@ mod tests {
         assert_eq!(entries[0].get_log_id().index, 1);
     }
 
-    /// Test 3: Append single entry
-    /// DISABLED: LogFlushed::new() is private in OpenRaft 0.9.21
-    /// Use integration tests in crates/kv/tests/integration_tests.rs instead
-    #[tokio::test]
-    #[ignore]
-    async fn test_log_append_single_entry() {
-        // This test requires OpenRaft internal APIs that are not public
-        // See TESTING STRATEGY comment above for test coverage alternatives
-    }
-
-    /// Test 4: Append multiple entries in batch
-    /// DISABLED: LogFlushed::new() is private in OpenRaft 0.9.21
-    /// Use integration tests in crates/kv/tests/integration_tests.rs instead
-    #[tokio::test]
-    #[ignore]
-    async fn test_log_append_batch_entries() {
-        // This test requires OpenRaft internal APIs that are not public
-        // See TESTING STRATEGY comment above for test coverage alternatives
-    }
+    // Note: Direct append tests removed - require private OpenRaft APIs (LogFlushed).
+    // Coverage provided by integration tests in crates/kv/tests/integration_tests.rs
 
     /// Test 5: Get entries by range
     #[tokio::test]
