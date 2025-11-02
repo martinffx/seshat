@@ -497,8 +497,8 @@ mod tests {
 
         for i in 0..10 {
             let op = Operation::Set {
-                key: format!("key{}", i).into_bytes(),
-                value: format!("value{}", i).into_bytes(),
+                key: format!("key{i}").into_bytes(),
+                value: format!("value{i}").into_bytes(),
             };
             let result = op.apply(&mut state).expect("Apply should succeed");
             assert_eq!(result, b"OK");
@@ -586,7 +586,7 @@ mod tests {
         for i in 0..1000 {
             let op = Operation::Set {
                 key: i.to_string().into_bytes(),
-                value: format!("val{}", i).into_bytes(),
+                value: format!("val{i}").into_bytes(),
             };
             op.apply(&mut state).expect("Apply should succeed");
         }
@@ -646,8 +646,8 @@ mod tests {
         // Set multiple keys
         for i in 0..5 {
             let op = Operation::Set {
-                key: format!("k{}", i).into_bytes(),
-                value: format!("v{}", i).into_bytes(),
+                key: format!("k{i}").into_bytes(),
+                value: format!("v{i}").into_bytes(),
             };
             op.apply(&mut state).expect("Apply should succeed");
         }

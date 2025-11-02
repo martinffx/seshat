@@ -14,6 +14,8 @@ use std::collections::HashMap;
 pub struct StateMachine {
     data: HashMap<Vec<u8>, Vec<u8>>,
     last_applied: u64,
+    /// Stores (term, leader_id) for the last applied log entry
+    last_applied_log: Option<(u64, u64)>,
 }
 
 impl StateMachine {
@@ -21,6 +23,7 @@ impl StateMachine {
         Self {
             data: HashMap::new(),
             last_applied: 0,
+            last_applied_log: None,
         }
     }
 
@@ -30,6 +33,12 @@ impl StateMachine {
 
     pub fn last_applied(&self) -> u64 {
         self.last_applied
+    }
+
+    /// Returns the full LogId metadata for the last applied entry
+    pub fn last_applied_log(&self) -> Option<(u64, u64, u64)> {
+        self.last_applied_log
+            .map(|(term, leader)| (term, leader, self.last_applied))
     }
 
     pub fn apply(
@@ -51,6 +60,19 @@ impl StateMachine {
         Ok(result)
     }
 
+    /// Apply with full LogId metadata (term, leader_id, index)
+    pub fn apply_with_log_id(
+        &mut self,
+        term: u64,
+        leader_id: u64,
+        index: u64,
+        data: &[u8],
+    ) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+        let result = self.apply(index, data)?;
+        self.last_applied_log = Some((term, leader_id));
+        Ok(result)
+    }
+
     pub fn snapshot(&self) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
         bincode::serialize(self).map_err(|e| e.into())
     }
@@ -59,6 +81,7 @@ impl StateMachine {
         let restored: StateMachine = bincode::deserialize(snapshot)?;
         self.data = restored.data;
         self.last_applied = restored.last_applied;
+        self.last_applied_log = restored.last_applied_log;
         Ok(())
     }
 }
@@ -142,8 +165,8 @@ mod tests {
         // Apply 100 operations sequentially
         for i in 1..=100 {
             let op = Operation::Set {
-                key: format!("key{}", i).into_bytes(),
-                value: format!("value{}", i).into_bytes(),
+                key: format!("key{i}").into_bytes(),
+                value: format!("value{i}").into_bytes(),
             };
             let op_bytes = op.serialize().unwrap();
             sm.apply(i, &op_bytes).unwrap();
@@ -293,8 +316,8 @@ mod tests {
         // Add data to sm1
         for i in 1..=5 {
             let op = Operation::Set {
-                key: format!("k{}", i).into_bytes(),
-                value: format!("v{}", i).into_bytes(),
+                key: format!("k{i}").into_bytes(),
+                value: format!("v{i}").into_bytes(),
             };
             sm1.apply(i, &op.serialize().unwrap()).unwrap();
         }
@@ -387,7 +410,7 @@ mod tests {
         // Add 100 keys
         for i in 0..100 {
             let op = Operation::Set {
-                key: format!("key{}", i).into_bytes(),
+                key: format!("key{i}").into_bytes(),
                 value: vec![0xAB; 1000], // 1KB each
             };
             sm.apply((i + 1) as u64, &op.serialize().unwrap()).unwrap();
@@ -457,7 +480,7 @@ mod tests {
 
         for i in 1..=10 {
             let op = Operation::Set {
-                key: format!("k{}", i).into_bytes(),
+                key: format!("k{i}").into_bytes(),
                 value: b"v".to_vec(),
             };
             sm.apply(i, &op.serialize().unwrap()).unwrap();
@@ -537,7 +560,7 @@ mod tests {
     #[test]
     fn test_debug_format() {
         let sm = StateMachine::new();
-        let debug_str = format!("{:?}", sm);
+        let debug_str = format!("{sm:?}");
 
         assert!(debug_str.contains("StateMachine"));
     }
@@ -587,7 +610,7 @@ mod tests {
         for i in 1..=10 {
             let op = Operation::Set {
                 key: b"samekey".to_vec(),
-                value: format!("v{}", i).into_bytes(),
+                value: format!("v{i}").into_bytes(),
             };
             sm.apply(i, &op.serialize().unwrap()).unwrap();
         }

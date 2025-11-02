@@ -645,7 +645,7 @@ mod tests {
             "is_leader should succeed: {:?}",
             result.err()
         );
-        assert_eq!(result.unwrap(), true, "Single node should be leader");
+        assert!(result.unwrap(), "Single node should be leader");
     }
 
     #[tokio::test]
@@ -659,11 +659,7 @@ mod tests {
         let result = node.is_leader().await;
         assert!(result.is_ok(), "is_leader should succeed");
         // Node 2 with peers should not be leader yet
-        assert_eq!(
-            result.unwrap(),
-            false,
-            "Node with peers should not be leader yet"
-        );
+        assert!(!result.unwrap(), "Node with peers should not be leader yet");
     }
 
     #[tokio::test]
@@ -728,8 +724,7 @@ mod tests {
         // Should show this node as leader
         assert!(
             metrics.contains("leader=Some(1)"),
-            "Metrics should show node 1 as leader: {}",
-            metrics
+            "Metrics should show node 1 as leader: {metrics}"
         );
     }
 
@@ -750,14 +745,12 @@ mod tests {
         let metrics = node.get_metrics().await.unwrap();
         assert!(
             metrics.contains("last_applied"),
-            "Metrics should show last_applied: {}",
-            metrics
+            "Metrics should show last_applied: {metrics}"
         );
         // After applying one operation, last_applied should be Some(LogId)
         assert!(
             !metrics.contains("last_applied=None"),
-            "Should have applied log after operation: {}",
-            metrics
+            "Should have applied log after operation: {metrics}"
         );
     }
 

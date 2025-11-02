@@ -4,7 +4,7 @@
 
 Migrate Seshat's consensus layer from `raft-rs 0.7` to `openraft 0.9` to eliminate transitive prost dependency conflicts (0.11 vs 0.14) and gain a better-maintained Raft implementation with cleaner trait APIs.
 
-**Current State:** ✅ Phase 2 Complete - In-memory storage implementation using OpenRaft 0.9.21 with storage-v2 API. Consolidated architecture with 4 crates (seshat, seshat-storage, seshat-resp, seshat-kv). 143 tests passing.
+**Current State:** ✅ Phase 1 Complete - In-memory storage implementation using OpenRaft 0.9.21 with storage-v2 API. Consolidated architecture with 4 crates (seshat, seshat-storage, seshat-resp, seshat-kv). 143 tests passing.
 
 **Target State:** ✅ ACHIEVED - Fully functional openraft-based in-memory storage with split storage traits (RaftLogStorage + RaftStateMachine).
 

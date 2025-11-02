@@ -76,24 +76,24 @@ async fn test_single_node_operation_sequence() {
 
     // Perform a sequence of operations
     for i in 0..10 {
-        let key = format!("key_{}", i).into_bytes();
-        let value = format!("value_{}", i).into_bytes();
+        let key = format!("key_{i}").into_bytes();
+        let value = format!("value_{i}").into_bytes();
 
         let set_op = Operation::Set {
             key: key.clone(),
             value,
         };
         let result = node.propose(set_op.serialize().unwrap()).await;
-        assert!(result.is_ok(), "Set operation {} should succeed", i);
+        assert!(result.is_ok(), "Set operation {i} should succeed");
         assert_eq!(result.unwrap(), b"OK");
     }
 
     // Delete all keys
     for i in 0..10 {
-        let key = format!("key_{}", i).into_bytes();
+        let key = format!("key_{i}").into_bytes();
         let del_op = Operation::Del { key };
         let result = node.propose(del_op.serialize().unwrap()).await;
-        assert!(result.is_ok(), "Del operation {} should succeed", i);
+        assert!(result.is_ok(), "Del operation {i} should succeed");
         assert_eq!(result.unwrap(), b"1");
     }
 }
@@ -110,8 +110,8 @@ async fn test_single_node_concurrent_operations() {
     for i in 0..5 {
         let node_clone = node.clone();
         let handle = tokio::spawn(async move {
-            let key = format!("concurrent_key_{}", i).into_bytes();
-            let value = format!("concurrent_value_{}", i).into_bytes();
+            let key = format!("concurrent_key_{i}").into_bytes();
+            let value = format!("concurrent_value_{i}").into_bytes();
 
             let set_op = Operation::Set { key, value };
             node_clone.propose(set_op.serialize().unwrap()).await
@@ -122,7 +122,7 @@ async fn test_single_node_concurrent_operations() {
     // Wait for all operations to complete
     for (i, handle) in handles.into_iter().enumerate() {
         let result = handle.await.unwrap();
-        assert!(result.is_ok(), "Concurrent operation {} should succeed", i);
+        assert!(result.is_ok(), "Concurrent operation {i} should succeed");
         assert_eq!(result.unwrap(), b"OK");
     }
 }
@@ -141,7 +141,7 @@ async fn test_single_node_metrics_tracking() {
     // Perform operations
     for i in 0..5 {
         let set_op = Operation::Set {
-            key: format!("key_{}", i).into_bytes(),
+            key: format!("key_{i}").into_bytes(),
             value: b"value".to_vec(),
         };
         node.propose(set_op.serialize().unwrap()).await.unwrap();
@@ -155,8 +155,7 @@ async fn test_single_node_metrics_tracking() {
     // Verify last_applied increased
     assert!(
         !metrics_after.contains("last_applied=None"),
-        "Should have applied logs: {}",
-        metrics_after
+        "Should have applied logs: {metrics_after}"
     );
 }
 
@@ -294,11 +293,11 @@ async fn test_high_volume_operations() {
     // Submit 100 operations sequentially
     for i in 0..100 {
         let op = Operation::Set {
-            key: format!("key_{}", i).into_bytes(),
-            value: format!("value_{}", i).into_bytes(),
+            key: format!("key_{i}").into_bytes(),
+            value: format!("value_{i}").into_bytes(),
         };
         let result = node.propose(op.serialize().unwrap()).await;
-        assert!(result.is_ok(), "Operation {} should succeed", i);
+        assert!(result.is_ok(), "Operation {i} should succeed");
     }
 
     // Verify metrics show all operations applied
@@ -342,18 +341,18 @@ async fn test_mixed_operation_types() {
         if i % 2 == 0 {
             // Set operation
             let op = Operation::Set {
-                key: format!("key_{}", i).into_bytes(),
+                key: format!("key_{i}").into_bytes(),
                 value: b"value".to_vec(),
             };
             let result = node.propose(op.serialize().unwrap()).await;
-            assert!(result.is_ok(), "Set operation {} should succeed", i);
+            assert!(result.is_ok(), "Set operation {i} should succeed");
         } else {
             // Del operation
             let op = Operation::Del {
                 key: format!("key_{}", i - 1).into_bytes(),
             };
             let result = node.propose(op.serialize().unwrap()).await;
-            assert!(result.is_ok(), "Del operation {} should succeed", i);
+            assert!(result.is_ok(), "Del operation {i} should succeed");
         }
     }
 }
@@ -367,7 +366,7 @@ async fn test_different_node_ids() {
     // Test various node IDs
     for node_id in [1, 10, 100, 1000] {
         let node = RaftNode::new(node_id, vec![]).await;
-        assert!(node.is_ok(), "Node {} should initialize", node_id);
+        assert!(node.is_ok(), "Node {node_id} should initialize");
 
         let node = node.unwrap();
         node.wait_for_leader(500)
@@ -376,9 +375,8 @@ async fn test_different_node_ids() {
 
         let metrics = node.get_metrics().await.unwrap();
         assert!(
-            metrics.contains(&format!("id={}", node_id)),
-            "Metrics should contain correct node ID: {}",
-            metrics
+            metrics.contains(&format!("id={node_id}")),
+            "Metrics should contain correct node ID: {metrics}"
         );
     }
 }

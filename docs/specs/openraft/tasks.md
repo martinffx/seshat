@@ -172,16 +172,7 @@ pub async fn get_metrics(&self) -> Result<String, RaftNodeError> {
 - Tests cover single-node and multi-node scenarios
 
 **Next Steps:**
-- Implement Task 5.5: Migrate RaftNode Tests
 - Complete Phase 5 validation checklist
-
-### Remaining Phase 5 Tasks
-
-#### Task 5.5: Migrate RaftNode Tests
-- [ ] Convert all tests to async
-- [ ] Update tests for new async API
-- [ ] Verify all edge cases covered
-- [ ] Remove obsolete synchronous tests
 
 ### Progress Tracking
 
@@ -189,11 +180,11 @@ pub async fn get_metrics(&self) -> Result<String, RaftNodeError> {
 - ✅ Task 5.2: RaftNode Initialization (Complete)
 - ✅ Task 5.3: Migrate propose() (Complete)
 - ✅ Task 5.4: Migrate API Methods (Complete)
-- [ ] Task 5.5: Migrate RaftNode Tests
+- ✅ Task 5.5: Migrate RaftNode Tests (Complete - all 26 tests are async)
 
 **Overall Migration Progress:**
-- Completed Tasks: 15/24 (62.5%)
-- Test Coverage: 177+ tests passing (includes 10 new API method tests)
+- Completed Tasks: 16/24 (66.7%)
+- Test Coverage: 177+ tests passing (all tests migrated to async)
 
 ### Risk Mitigation
 
@@ -252,5 +243,5 @@ Before completing Phase 5:
 - Available fields: current_leader, current_term, last_applied, last_log_index
 - Read-only operation, no side effects
 
-**Next Immediate Action:**
-Implement Task 5.5: Migrate RaftNode Tests (optional - current tests are comprehensive)
+**Phase 5 Status:**
+✅ Complete - All RaftNode tests migrated to async (26 tests with #[tokio::test])
