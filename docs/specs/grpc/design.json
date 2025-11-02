@@ -1,0 +1,458 @@
+{
+  "feature": "grpc",
+  "overview": {
+    "description": "gRPC network layer that replaces StubNetwork placeholder for OpenRaft consensus",
+    "current_state": "StubNetwork placeholder exists (from OpenRaft Phase 4)",
+    "target_state": "Production-ready gRPC transport with connection pooling and retry logic",
+    "priority": "HIGH (blocks 3-node cluster testing)",
+    "estimated_effort_hours": "15-22"
+  },
+  "design": {
+    "domain_model": {
+      "entities": [
+        {
+          "name": "OpenRaftNetwork",
+          "file": "crates/raft/src/network.rs",
+          "implements": "openraft::RaftNetwork<RaftTypeConfig>",
+          "responsibilities": [
+            "Implements OpenRaft's RaftNetwork trait",
+            "Manages connection pool to peer nodes",
+            "Coordinates retry logic for transient failures",
+            "Routes Raft RPC calls to appropriate gRPC clients",
+            "Converts gRPC errors to OpenRaft errors"
+          ],
+          "methods": [
+            "send_append_entries(target: u64, req: AppendEntriesRequest) -> Result<AppendEntriesResponse>",
+            "send_vote(target: u64, req: VoteRequest) -> Result<VoteResponse>",
+            "send_install_snapshot(target: u64, req: InstallSnapshotRequest) -> Result<InstallSnapshotResponse>",
+            "get_or_create_client(node_id: u64) -> Result<RaftGrpcClient>"
+          ],
+          "dependencies": ["ConnectionPool", "RaftGrpcClient", "common::NodeId"]
+        },
+        {
+          "name": "RaftGrpcServer",
+          "file": "crates/raft/src/grpc_server.rs",
+          "implements": "raft_service_server::RaftService (generated from protobuf)",
+          "responsibilities": [
+            "Receives incoming Raft RPCs from peer nodes",
+            "Deserializes protobuf messages to OpenRaft types",
+            "Delegates to local RaftNode for processing",
+            "Serializes responses back to protobuf",
+            "Handles streaming for large snapshot transfers"
+          ],
+          "methods": [
+            "request_vote(&self, request: tonic::Request<proto::VoteRequest>) -> Result<tonic::Response<proto::VoteResponse>>",
+            "append_entries(&self, request: tonic::Request<proto::AppendEntriesRequest>) -> Result<tonic::Response<proto::AppendEntriesResponse>>",
+            "install_snapshot(&self, request: tonic::Request<Streaming<proto::InstallSnapshotRequest>>) -> Result<tonic::Response<proto::InstallSnapshotResponse>>"
+          ],
+          "dependencies": ["Arc<RaftNode>", "protobuf conversion utilities"]
+        },
+        {
+          "name": "RaftGrpcClient",
+          "file": "crates/raft/src/grpc_client.rs",
+          "wraps": "tonic-generated gRPC client for a single peer",
+          "responsibilities": [
+            "Implements retry logic with exponential backoff",
+            "Handles timeout enforcement per RPC type",
+            "Converts protobuf types to/from OpenRaft types",
+            "Manages streaming for snapshot installation"
+          ],
+          "methods": [
+            "call_vote(&mut self, req: VoteRequest) -> Result<VoteResponse>",
+            "call_append_entries(&mut self, req: AppendEntriesRequest) -> Result<AppendEntriesResponse>",
+            "call_install_snapshot(&mut self, req: InstallSnapshotRequest) -> Result<InstallSnapshotResponse>",
+            "is_connected(&self) -> bool",
+            "reconnect(&mut self) -> Result<()>"
+          ],
+          "dependencies": ["tonic::transport::Channel", "RaftServiceClient"]
+        },
+        {
+          "name": "ConnectionPool",
+          "file": "crates/raft/src/connection_pool.rs",
+          "data_structure": "HashMap<NodeId, RaftGrpcClient> wrapped in RwLock",
+          "responsibilities": [
+            "Manages lazy connection establishment to peer nodes",
+            "Caches active gRPC channels per node_id",
+            "Handles connection health monitoring",
+            "Provides thread-safe access via RwLock",
+            "Evicts stale/failed connections"
+          ],
+          "methods": [
+            "get_or_connect(node_id: u64, addr: String) -> Result<RaftGrpcClient>",
+            "remove(node_id: u64)",
+            "health_check_all() -> Vec<(u64, bool)>"
+          ],
+          "dependencies": ["tonic::transport::Channel", "common::NodeId"]
+        }
+      ],
+      "services": {
+        "connection_management": {
+          "description": "ConnectionPool manages peer connections with lazy initialization",
+          "strategy": "Connections established on first RPC call (not at startup)",
+          "failure_handling": "Failed connections removed from pool and retried on next call"
+        },
+        "retry_coordination": {
+          "description": "RaftGrpcClient handles retry logic per RPC type",
+          "vote_rpcs": "No retry (election timeouts handle failures)",
+          "append_entries_rpcs": "Retry 3 times with exponential backoff (50ms, 100ms, 200ms)",
+          "install_snapshot_rpcs": "Retry 5 times with backoff (network instability tolerance)",
+          "transient_errors": "Trigger retries (Unavailable, DeadlineExceeded)",
+          "permanent_errors": "Fail immediately (InvalidArgument, NotFound)"
+        },
+        "error_conversion": {
+          "description": "NetworkError enum provides bidirectional conversions",
+          "chain": "tonic::Status → NetworkError → openraft::RPCError",
+          "context_preservation": "Preserves node_id, RPC type, attempt count for debugging"
+        }
+      }
+    },
+    "database": {
+      "persistence": "In-memory only (no database)",
+      "storage_type": "In-memory connection pool only",
+      "justification": "All persistent state (log, snapshots) managed by storage crate via OpenRaft",
+      "data_volume": "Small - connection metadata per peer (max 10 connections in Phase 1)",
+      "access_patterns": {
+        "read_heavy": "Lookup peer connection from pool on every RPC",
+        "write_rare": "Connection establishment only on first call or after failure"
+      },
+      "connection_metadata": {
+        "ephemeral": true,
+        "fields": ["node_id", "addr", "channel", "client", "established_at", "last_used"]
+      }
+    },
+    "endpoints": {
+      "grpc_service": {
+        "protocol": "gRPC",
+        "port": 7379,
+        "transport": "HTTP/2 (gRPC requirement)",
+        "tls": "Optional (Phase 4)",
+        "service_definition": "crates/raft/proto/raft.proto",
+        "rpcs": [
+          {
+            "name": "RequestVote",
+            "type": "unary",
+            "timeout_ms": 500,
+            "retry": false,
+            "purpose": "Leader election vote request"
+          },
+          {
+            "name": "AppendEntries",
+            "type": "unary",
+            "timeout_ms": 1000,
+            "retry": true,
+            "max_retries": 3,
+            "purpose": "Log replication and heartbeat"
+          },
+          {
+            "name": "InstallSnapshot",
+            "type": "streaming",
+            "timeout_ms": 30000,
+            "retry": true,
+            "max_retries": 5,
+            "chunk_size_kb": 64,
+            "purpose": "Snapshot transfer for log compaction"
+          }
+        ]
+      },
+      "server_lifecycle": [
+        "seshat binary starts RaftGrpcServer on port 7379",
+        "Server binds to 0.0.0.0:7379 (all interfaces)",
+        "Server registers RaftService implementation",
+        "Incoming RPCs handled concurrently by tokio",
+        "Each RPC delegates to local RaftNode",
+        "Graceful shutdown on SIGTERM/SIGINT"
+      ]
+    },
+    "events": {
+      "event_bus": "No event bus in Phase 1 (Raft is request-response)",
+      "async_patterns": [
+        "All gRPC methods are async (tonic requirement)",
+        "ConnectionPool uses async RwLock (tokio::sync::RwLock)",
+        "Retry logic uses tokio::time::sleep for backoff",
+        "Streaming snapshots use tonic::Streaming<T>"
+      ],
+      "future_events": "Phase 4 may add metrics events for observability"
+    },
+    "dependencies": {
+      "upstream_crates": [
+        {
+          "name": "openraft",
+          "purpose": "Provides RaftNetwork<RaftTypeConfig> trait"
+        },
+        {
+          "name": "common",
+          "purpose": "Provides NodeId, Error, configuration types"
+        }
+      ],
+      "downstream_crates": [
+        {
+          "name": "seshat binary",
+          "purpose": "Starts gRPC server on port 7379"
+        },
+        {
+          "name": "RaftNode",
+          "purpose": "Uses OpenRaftNetwork for consensus operations"
+        }
+      ],
+      "external_libraries": [
+        {
+          "name": "tonic",
+          "version": "0.11+",
+          "purpose": "gRPC framework for Rust"
+        },
+        {
+          "name": "prost",
+          "version": "0.14+",
+          "purpose": "Protobuf serialization (matches OpenRaft requirement)"
+        },
+        {
+          "name": "tokio",
+          "version": "1.x",
+          "purpose": "Async runtime"
+        },
+        {
+          "name": "tower",
+          "version": "0.4+",
+          "purpose": "Middleware for gRPC (timeouts, retries)"
+        },
+        {
+          "name": "async-trait",
+          "version": "0.1",
+          "purpose": "Async trait support"
+        }
+      ]
+    },
+    "error_handling": {
+      "error_types": [
+        {
+          "name": "NetworkError",
+          "file": "crates/raft/src/network/error.rs",
+          "variants": [
+            "ConnectionFailed { node_id, source: tonic::transport::Error }",
+            "Timeout { node_id, timeout_ms }",
+            "RpcFailed { node_id, status: tonic::Status }",
+            "Serialization(String)",
+            "Deserialization(String)",
+            "NodeNotFound { node_id }",
+            "MaxRetriesExceeded { node_id, max_retries }"
+          ]
+        }
+      ],
+      "error_propagation_chain": [
+        "tonic::Status (gRPC error)",
+        "NetworkError (raft crate)",
+        "openraft::RPCError<RaftTypeConfig>",
+        "RaftError (raft crate)",
+        "KvServiceError / SqlServiceError",
+        "RespValue::Error / SQL Error Response"
+      ],
+      "retry_semantics": {
+        "transient_errors": [
+          "tonic::Code::Unavailable → Retry with backoff",
+          "tonic::Code::DeadlineExceeded → Retry with increased timeout",
+          "tonic::Code::ResourceExhausted → Retry with backoff",
+          "tonic::Code::Unknown → Retry once (may be transient)"
+        ],
+        "permanent_errors": [
+          "tonic::Code::InvalidArgument → Fail immediately (bad request)",
+          "tonic::Code::NotFound → Fail immediately (wrong endpoint)",
+          "tonic::Code::PermissionDenied → Fail immediately (auth failure)",
+          "tonic::Code::Unimplemented → Fail immediately (version mismatch)"
+        ]
+      },
+      "retry_config": {
+        "max_retries": {
+          "append_entries": 3,
+          "install_snapshot": 5
+        },
+        "initial_backoff_ms": 50,
+        "max_backoff_ms": 5000,
+        "backoff_multiplier": 2.0
+      }
+    },
+    "integration_points": {
+      "initialization_flow": {
+        "step_1": "Load configuration from config.toml",
+        "step_2": "Initialize storage (OpenRaftMemStorage)",
+        "step_3": "Create network layer (OpenRaftNetwork with cluster membership)",
+        "step_4": "Create Raft node (wraps openraft::Raft with network and storage)",
+        "step_5": "Start gRPC server (RaftGrpcServer on port 7379)",
+        "step_6": "Start RESP server (client-facing KV service on port 6379)"
+      },
+      "raft_node_integration": {
+        "description": "RaftNode uses OpenRaftNetwork via OpenRaft's Raft instance",
+        "automatic_usage": "OpenRaft automatically uses network for RPCs when consensus operations occur"
+      }
+    },
+    "performance": {
+      "connection_pooling": {
+        "strategy": "Lazy initialization (connections created on first RPC)",
+        "keep_alive": "HTTP/2 connection reuse (built-in with tonic)",
+        "timeouts": {
+          "request_vote_ms": 500,
+          "append_entries_ms": 1000,
+          "install_snapshot_ms": 30000
+        }
+      },
+      "streaming": {
+        "purpose": "InstallSnapshot uses streaming to avoid loading entire snapshot in memory",
+        "chunk_size_kb": 64,
+        "flow_control": "gRPC backpressure prevents buffer overflow",
+        "receiver_behavior": "Writes chunks directly to storage"
+      },
+      "memory_management": {
+        "connection_pool_bound": "Bounded to cluster size (3-5 nodes in Phase 1)",
+        "no_unbounded_buffers": "No unbounded message buffers",
+        "streaming_advantage": "Prevents large snapshot memory spikes"
+      }
+    },
+    "observability": {
+      "tracing": {
+        "library": "tracing crate for structured logging",
+        "instrumentation": [
+          "All RaftNetwork methods (#[instrument] macro)",
+          "Connection establishment and failures",
+          "Retry attempts with backoff timings",
+          "Request/response latencies",
+          "Error occurrences with full context"
+        ],
+        "structured_fields": ["node_id", "operation", "term", "latency_ms", "retry_count"]
+      },
+      "metrics_future_phase_4": [
+        "raft_rpc_requests_total{type, status, target_node}",
+        "raft_rpc_duration_seconds{type, target_node}",
+        "raft_network_errors_total{type, error_code, target_node}",
+        "raft_connection_pool_size"
+      ]
+    },
+    "testing_strategy": {
+      "unit_tests": [
+        "Connection pool: concurrent get_or_connect",
+        "Retry logic: transient vs permanent error handling",
+        "Error conversions: tonic::Status → NetworkError → RPCError",
+        "Timeout enforcement per RPC type"
+      ],
+      "integration_tests": [
+        "2-node cluster: leader election via gRPC",
+        "3-node cluster: log replication via AppendEntries",
+        "Snapshot transfer: streaming InstallSnapshot",
+        "Network partition simulation: connection failures"
+      ],
+      "chaos_tests": [
+        "Network partition during election",
+        "Slow network (inject latency)",
+        "Connection failures mid-RPC",
+        "Snapshot transfer interruption"
+      ]
+    }
+  },
+  "implementation_phases": [
+    {
+      "phase": 1,
+      "name": "Protobuf Definitions",
+      "duration_hours": "1-2",
+      "tasks": [
+        "Define raft.proto with RequestVote, AppendEntries, InstallSnapshot messages",
+        "Generate Rust code with prost-build",
+        "Create type conversions: OpenRaft types ↔ protobuf types"
+      ]
+    },
+    {
+      "phase": 2,
+      "name": "RaftGrpcClient",
+      "duration_hours": "3-4",
+      "tasks": [
+        "Implement client wrapper around generated tonic client",
+        "Add retry logic with exponential backoff",
+        "Implement timeout enforcement per RPC type",
+        "Unit tests for retry behavior"
+      ]
+    },
+    {
+      "phase": 3,
+      "name": "ConnectionPool",
+      "duration_hours": "2-3",
+      "tasks": [
+        "Implement connection pool with lazy initialization",
+        "Thread-safe access with RwLock or DashMap",
+        "Connection health tracking",
+        "Unit tests for concurrent access"
+      ]
+    },
+    {
+      "phase": 4,
+      "name": "OpenRaftNetwork",
+      "duration_hours": "2-3",
+      "tasks": [
+        "Implement RaftNetwork trait",
+        "Integrate ConnectionPool",
+        "Route RPCs to appropriate clients",
+        "Error conversion to OpenRaft types"
+      ]
+    },
+    {
+      "phase": 5,
+      "name": "RaftGrpcServer",
+      "duration_hours": "3-4",
+      "tasks": [
+        "Implement gRPC service trait",
+        "Delegate to local RaftNode",
+        "Handle streaming for snapshots",
+        "Integration tests with 2-node cluster"
+      ]
+    },
+    {
+      "phase": 6,
+      "name": "Integration & Testing",
+      "duration_hours": "4-6",
+      "tasks": [
+        "Wire into seshat binary",
+        "3-node cluster integration tests",
+        "Leader election via gRPC",
+        "Log replication validation",
+        "Snapshot transfer test"
+      ]
+    }
+  ],
+  "success_criteria": [
+    "3-node cluster performs leader election via gRPC",
+    "Log replication works via AppendEntries RPCs",
+    "Snapshot transfer completes via streaming InstallSnapshot",
+    "Retry logic handles transient connection failures",
+    "Connection pool reuses connections efficiently",
+    "No prost version conflicts (all use 0.14)",
+    "All unit tests pass (coverage >80%)",
+    "Integration tests pass (2-node and 3-node clusters)"
+  ],
+  "future_enhancements": {
+    "phase_3": [
+      "Dynamic cluster membership (add/remove nodes via Raft configuration changes)",
+      "Service discovery integration (replace static hostname:port with DNS-SD or Consul)",
+      "Connection health checks and automatic reconnection"
+    ],
+    "phase_4": [
+      "TLS/mTLS for secure node-to-node communication",
+      "OpenTelemetry metrics (request latency, retry counts, connection pool size)",
+      "Prometheus endpoint for network metrics"
+    ],
+    "optimizations": [
+      "gRPC streaming for large snapshot transfers (replace chunked InstallSnapshot)",
+      "Connection pooling with circuit breaker pattern for failing nodes",
+      "Adaptive timeout adjustment based on measured latencies",
+      "Compression for AppendEntries messages (reduce network bandwidth)"
+    ]
+  },
+  "references": [
+    "docs/specs/openraft/design.md - OpenRaft migration design (StubNetwork replacement)",
+    "docs/standards/tech.md - gRPC standards (tonic 0.11+, prost 0.14+)",
+    "docs/architecture/crates.md - Raft crate architecture (consensus + transport layer)",
+    "docs/standards/practices.md - TDD workflow and chaos testing requirements"
+  ],
+  "metadata": {
+    "created": "2025-10-26",
+    "feature": "grpc-network-layer",
+    "phase": "1B (Post-OpenRaft Migration)",
+    "priority": "HIGH",
+    "blocks": "3-node cluster testing"
+  }
+}
