@@ -71,14 +71,15 @@ As a Redis client, I want to execute GET/SET/DEL commands over TCP so that I can
 
 ## Dependencies
 
-- protocol-resp crate (100% complete - provides RespCodec, RespCommand, RespValue for parsing and encoding)
-- **openraft migration (BLOCKING)** - must complete before KV service implementation begins
-- raft crate (in progress - provides RaftNode wrapper with openraft async APIs, gRPC transport, StateMachine, MemStorage)
-- storage crate (in progress - provides MemStorage implementation of raft::Storage trait, will migrate to RocksDB)
-- common crate (provides shared types: NodeId, Error, Result, configuration types)
+- seshat-resp crate (100% complete - provides RespCodec, RespCommand, RespValue for parsing and encoding)
+- **gRPC network layer (BLOCKING)** - must complete for multi-node operation
+- **RocksDB storage (BLOCKING)** - must complete for persistence
+- seshat-storage crate (✅ Phase 1 Complete - provides RaftTypeConfig, Operation types, OpenRaft storage traits)
+- seshat-kv crate (in progress - provides RaftNode wrapper with OpenRaft async APIs)
 - tokio 1.x - async runtime for all I/O operations
-- prost - protobuf serialization (replaces bincode)
 - seshat binary (orchestration - needs TCP server on port 6379 that routes to KvService)
+
+> NOTE: Common crate was consolidated into seshat-storage. Raft crate was renamed to storage during OpenRaft migration.
 
 ## Technical Details
 

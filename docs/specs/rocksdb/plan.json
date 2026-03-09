@@ -1,0 +1,387 @@
+{
+  "feature": "rocksdb-storage",
+  "description": "Persistent storage layer with RocksDB for durability",
+  "type": "storage_implementation",
+  "estimated_effort_hours": "14-17",
+  "total_phases": 5,
+  "status": "not_started",
+  "dependencies": ["openraft"],
+
+  "phases": {
+    "initialization": {
+      "name": "RocksDB Initialization",
+      "description": "Set up RocksDB with 6 column families",
+      "order": 1,
+      "dependencies": [],
+      "estimated_hours": "3-4",
+      "tasks": ["create_column_families", "configure_options", "test_open_close"],
+      "files_affected": [
+        "crates/storage/src/rocksdb.rs",
+        "crates/storage/src/lib.rs"
+      ],
+      "success_criteria": [
+        "6 column families created: system_raft_log, system_raft_state, system_data, data_raft_log, data_raft_state, data_kv",
+        "RocksDB opens successfully",
+        "RocksDB closes cleanly"
+      ]
+    },
+    "basic_operations": {
+      "name": "CRUD Operations",
+      "description": "Implement basic get/put/delete operations per column family",
+      "order": 2,
+      "dependencies": ["initialization"],
+      "estimated_hours": "3-4",
+      "tasks": ["implement_get", "implement_put", "implement_delete", "implement_exists", "batch_writes"],
+      "files_affected": [
+        "crates/storage/src/rocksdb.rs"
+      ],
+      "success_criteria": [
+        "get() returns correct value or None",
+        "put() stores value and persists to disk",
+        "delete() removes key",
+        "exists() returns bool",
+        "Batch write is atomic"
+      ]
+    },
+    "raft_log_storage": {
+      "name": "Raft Log Storage",
+      "description": "Implement RaftLogStorage trait for log persistence",
+      "order": 3,
+      "dependencies": ["basic_operations"],
+      "estimated_hours": "3-4",
+      "tasks": ["implement_log_append", "implement_log_get_range", "implement_log_truncate", "implement_vote_storage"],
+      "files_affected": [
+        "crates/storage/src/rocksdb_log.rs"
+      ],
+      "success_criteria": [
+        "append_entry() persists to data_raft_log",
+        "get_log_entries() returns range",
+        "truncate_log_after() removes entries after index",
+        "vote storage works"
+      ]
+    },
+    "state_machine_storage": {
+      "name": "State Machine Storage",
+      "description": "Implement RaftStateMachine trait for KV persistence",
+      "order": 4,
+      "dependencies": ["raft_log_storage"],
+      "estimated_hours": "3-4",
+      "tasks": ["implement_state_get", "implement_state_put", "implement_snapshot", "implement_snapshot_restore"],
+      "files_affected": [
+        "crates/storage/src/rocksdb_state_machine.rs"
+      ],
+      "success_criteria": [
+        "State machine get returns correct value",
+        "State machine put persists to data_kv",
+        "Snapshot creation succeeds",
+        "Snapshot restoration succeeds"
+      ]
+    },
+    "openraft_integration": {
+      "name": "OpenRaft Integration",
+      "description": "Integrate RocksDB storage with OpenRaft storage traits",
+      "order": 5,
+      "dependencies": ["state_machine_storage"],
+      "estimated_hours": "2-3",
+      "tasks": ["implement_raft_log_storage_trait", "implement_raft_state_machine_trait", "integration_tests"],
+      "files_affected": [
+        "crates/storage/src/lib.rs"
+      ],
+      "success_criteria": [
+        "OpenRaftRocksDBLog implements RaftLogStorage",
+        "OpenRaftRocksDBStateMachine implements RaftStateMachine",
+        "Single-node cluster test passes",
+        "Crash recovery works"
+      ]
+    }
+  },
+
+  "tasks": {
+    "create_column_families": {
+      "id": "rocksdb_1",
+      "name": "Create column families",
+      "phase": "initialization",
+      "order": 1,
+      "estimated_hours": "1",
+      "description": "Initialize RocksDB with 6 column families",
+      "files": ["crates/storage/src/rocksdb.rs"],
+      "dependencies": [],
+      "acceptance_criteria": [
+        "Column family 'system_raft_log' created",
+        "Column family 'system_raft_state' created",
+        "Column family 'system_data' created",
+        "Column family 'data_raft_log' created",
+        "Column family 'data_raft_state' created",
+        "Column family 'data_kv' created"
+      ]
+    },
+    "configure_options": {
+      "id": "rocksdb_2",
+      "name": "Configure RocksDB options",
+      "phase": "initialization",
+      "order": 2,
+      "estimated_hours": "1",
+      "description": "Set optimized RocksDB options for the workload",
+      "files": ["crates/storage/src/rocksdb.rs"],
+      "dependencies": ["create_column_families"],
+      "acceptance_criteria": [
+        "LZ4 compression enabled",
+        "Bloom filter for data_kv",
+        "64MB block cache",
+        "WAL enabled for durability"
+      ]
+    },
+    "test_open_close": {
+      "id": "rocksdb_3",
+      "name": "Test open/close lifecycle",
+      "phase": "initialization",
+      "order": 3,
+      "estimated_hours": "1",
+      "description": "Test RocksDB can be opened and closed cleanly",
+      "files": ["crates/storage/src/rocksdb.rs"],
+      "dependencies": ["configure_options"],
+      "acceptance_criteria": [
+        "Open succeeds with valid path",
+        "Close succeeds without error",
+        "Reopen preserves data"
+      ]
+    },
+    "implement_get": {
+      "id": "rocksdb_4",
+      "name": "Implement get operation",
+      "phase": "basic_operations",
+      "order": 1,
+      "estimated_hours": "0.5",
+      "description": "Implement get(cf, key) -> Option<Vec<u8>>",
+      "files": ["crates/storage/src/rocksdb.rs"],
+      "dependencies": ["initialization"],
+      "acceptance_criteria": [
+        "Returns Some(value) if key exists",
+        "Returns None if key doesn't exist",
+        "Works on all column families"
+      ]
+    },
+    "implement_put": {
+      "id": "rocksdb_5",
+      "name": "Implement put operation",
+      "phase": "basic_operations",
+      "order": 2,
+      "estimated_hours": "0.5",
+      "description": "Implement put(cf, key, value)",
+      "files": ["crates/storage/src/rocksdb.rs"],
+      "dependencies": ["implement_get"],
+      "acceptance_criteria": [
+        "Stores value at key",
+        "Value is immediately readable",
+        "Value persists across reopen"
+      ]
+    },
+    "implement_delete": {
+      "id": "rocksdb_6",
+      "name": "Implement delete operation",
+      "phase": "basic_operations",
+      "order": 3,
+      "estimated_hours": "0.5",
+      "description": "Implement delete(cf, key)",
+      "files": ["crates/storage/src/rocksdb.rs"],
+      "dependencies": ["implement_put"],
+      "acceptance_criteria": [
+        "Removes key from CF",
+        "exists() returns false after delete",
+        "No error on non-existent key"
+      ]
+    },
+    "implement_exists": {
+      "id": "rocksdb_7",
+      "name": "Implement exists operation",
+      "phase": "basic_operations",
+      "order": 4,
+      "estimated_hours": "0.5",
+      "description": "Implement exists(cf, key) -> bool",
+      "files": ["crates/storage/src/rocksdb.rs"],
+      "dependencies": ["implement_delete"],
+      "acceptance_criteria": [
+        "Returns true if key exists",
+        "Returns false if key doesn't exist"
+      ]
+    },
+    "batch_writes": {
+      "id": "rocksdb_8",
+      "name": "Implement batch writes",
+      "phase": "basic_operations",
+      "order": 5,
+      "estimated_hours": "1",
+      "description": "Implement atomic batch writes across CFs",
+      "files": ["crates/storage/src/rocksdb.rs"],
+      "dependencies": ["implement_exists"],
+      "acceptance_criteria": [
+        "WriteBatch writes multiple keys",
+        "commit() is atomic (all or nothing)",
+        "fsync called for durability"
+      ]
+    },
+    "implement_log_append": {
+      "id": "rocksdb_9",
+      "name": "Implement log append",
+      "phase": "raft_log_storage",
+      "order": 1,
+      "estimated_hours": "1",
+      "description": "Implement append operation for Raft log entries",
+      "files": ["crates/storage/src/rocksdb_log.rs"],
+      "dependencies": ["basic_operations"],
+      "acceptance_criteria": [
+        "Appends entry to data_raft_log CF",
+        "Key format: log:{index}",
+        "Value is serialized Entry"
+      ]
+    },
+    "implement_log_get_range": {
+      "id": "rocksdb_10",
+      "name": "Implement log range query",
+      "phase": "raft_log_storage",
+      "order": 2,
+      "estimated_hours": "1",
+      "description": "Implement get_log_entries(low, high)",
+      "files": ["crates/storage/src/rocksdb_log.rs"],
+      "dependencies": ["implement_log_append"],
+      "acceptance_criteria": [
+        "Returns entries in range [low, high)",
+        "Entries in correct order",
+        "Handles gaps (compacted entries)"
+      ]
+    },
+    "implement_log_truncate": {
+      "id": "rocksdb_11",
+      "name": "Implement log truncation",
+      "phase": "raft_log_storage",
+      "order": 3,
+      "estimated_hours": "0.5",
+      "description": "Implement truncate after index",
+      "files": ["crates/storage/src/rocksdb_log.rs"],
+      "dependencies": ["implement_log_get_range"],
+      "acceptance_criteria": [
+        "Removes entries with index > given",
+        "Preserves entries <= given index"
+      ]
+    },
+    "implement_vote_storage": {
+      "id": "rocksdb_12",
+      "name": "Implement vote storage",
+      "phase": "raft_log_storage",
+      "order": 4,
+      "estimated_hours": "0.5",
+      "description": "Implement persistent vote storage in data_raft_state",
+      "files": ["crates/storage/src/rocksdb_log.rs"],
+      "dependencies": ["implement_log_truncate"],
+      "acceptance_criteria": [
+        "Vote persisted to data_raft_state",
+        "Vote survives restart"
+      ]
+    },
+    "implement_state_get": {
+      "id": "rocksdb_13",
+      "name": "Implement state get",
+      "phase": "state_machine_storage",
+      "order": 1,
+      "estimated_hours": "0.5",
+      "description": "Implement state machine get operation",
+      "files": ["crates/storage/src/rocksdb_state_machine.rs"],
+      "dependencies": ["raft_log_storage"],
+      "acceptance_criteria": [
+        "Gets value from data_kv CF",
+        "Returns correct type"
+      ]
+    },
+    "implement_state_put": {
+      "id": "rocksdb_14",
+      "name": "Implement state put",
+      "phase": "state_machine_storage",
+      "order": 2,
+      "estimated_hours": "1",
+      "description": "Implement state machine put operation",
+      "files": ["crates/storage/src/rocksdb_state_machine.rs"],
+      "dependencies": ["implement_state_get"],
+      "acceptance_criteria": [
+        "Stores key-value in data_kv CF",
+        "Key is user's key (from Operation)",
+        "Value is user's value"
+      ]
+    },
+    "implement_snapshot": {
+      "id": "rocksdb_15",
+      "name": "Implement snapshot creation",
+      "phase": "state_machine_storage",
+      "order": 3,
+      "estimated_hours": "1",
+      "description": "Implement snapshot creation via RocksDB checkpoint",
+      "files": ["crates/storage/src/rocksdb_state_machine.rs"],
+      "dependencies": ["implement_state_put"],
+      "acceptance_criteria": [
+        "Creates checkpoint directory",
+        "Checkpoint contains all data_kv data",
+        "Records last_included_index"
+      ]
+    },
+    "implement_snapshot_restore": {
+      "id": "rocksdb_16",
+      "name": "Implement snapshot restore",
+      "phase": "state_machine_storage",
+      "order": 4,
+      "estimated_hours": "1",
+      "description": "Implement restoring from checkpoint",
+      "files": ["crates/storage/src/rocksdb_state_machine.rs"],
+      "dependencies": ["implement_snapshot"],
+      "acceptance_criteria": [
+        "Restores from checkpoint directory",
+        "Data matches snapshot",
+        "State machine functional after restore"
+      ]
+    },
+    "implement_raft_log_storage_trait": {
+      "id": "rocksdb_17",
+      "name": "Implement RaftLogStorage trait",
+      "phase": "openraft_integration",
+      "order": 1,
+      "estimated_hours": "1",
+      "description": "Implement openraft::RaftLogStorage for RocksDB",
+      "files": ["crates/storage/src/rocksdb_log.rs"],
+      "dependencies": ["state_machine_storage"],
+      "acceptance_criteria": [
+        "Implements RaftLogStorage trait",
+        "All trait methods implemented",
+        "Async methods use async-trait"
+      ]
+    },
+    "implement_raft_state_machine_trait": {
+      "id": "rocksdb_18",
+      "name": "Implement RaftStateMachine trait",
+      "phase": "openraft_integration",
+      "order": 2,
+      "estimated_hours": "1",
+      "description": "Implement openraft::RaftStateMachine for RocksDB",
+      "files": ["crates/storage/src/rocksdb_state_machine.rs"],
+      "dependencies": ["implement_raft_log_storage_trait"],
+      "acceptance_criteria": [
+        "Implements RaftStateMachine trait",
+        "All trait methods implemented",
+        "apply() uses idempotency check"
+      ]
+    },
+    "integration_tests": {
+      "id": "rocksdb_19",
+      "name": "Integration tests",
+      "phase": "openraft_integration",
+      "order": 3,
+      "estimated_hours": "1",
+      "description": "Test single-node with RocksDB storage",
+      "files": ["crates/storage/tests/rocksdb_tests.rs"],
+      "dependencies": ["implement_raft_state_machine_trait"],
+      "acceptance_criteria": [
+        "Single-node cluster starts with RocksDB",
+        "SET/GET operations persist",
+        "Crash recovery works",
+        "No data loss after restart"
+      ]
+    }
+  }
+}
