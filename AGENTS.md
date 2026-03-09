@@ -223,13 +223,12 @@ seshat/
    bd update <wip-id> --notes "progress..."
    bd sync
    ```
-4. **PUSH TO REMOTE** - This is MANDATORY:
+4. **PUSH TO REMOTE** - This is MANDATORY (Graphite handles it):
    ```bash
-   # In worktree
-   git pull --rebase
-   gt branch restack  # If using stacked commits
-   git push
-   git status  # MUST show "up to date with origin"
+   # In worktree - Graphite handles rebase + push
+   gt branch sync     # pull --rebase + restack all branches
+   gt stack submit   # push all branches + create PRs
+   git status         # verify "up to date with origin"
    ```
 5. **Clean up** - Clear stashes, prune branches
 6. **Verify** - All changes committed AND pushed
