@@ -1,349 +1,237 @@
 {
-  "feature": "grpc-network",
-  "description": "gRPC network layer for OpenRaft RPC communication between nodes",
-  "type": "network_implementation",
-  "estimated_effort_hours": "12-16",
-  "total_phases": 4,
-  "status": "not_started",
+  "feature": "grpc",
+  "spec": "docs/specs/grpc/spec.md",
+  "goal": "Replace StubNetwork with production gRPC transport for OpenRaft RPC communication between nodes",
+  "total_tasks": 18,
+  "status": "in_progress",
   "dependencies": ["openraft"],
 
-  "phases": {
-    "protobuf_schema": {
-      "name": "Protocol Buffers Schema",
-      "description": "Define protobuf messages for Raft RPC",
-      "order": 1,
-      "dependencies": [],
-      "estimated_hours": "2-3",
-      "tasks": ["define_raft_proto", "generate_rust_types", "test_serialization"],
-      "files_affected": [
-        "crates/raft/proto/raft.proto",
-        "generated files"
-      ],
-      "success_criteria": [
-        "RaftVoteRequest and RaftVoteResponse defined",
-        "RaftAppendEntriesRequest and Response defined",
-        "RaftInstallSnapshotRequest defined",
-        "Rust code generates successfully"
+  "phases": [
+    {
+      "id": "P0",
+      "name": "Error Handling Infrastructure",
+      "description": "Define network error types and error conversion chains for gRPC communication",
+      "tasks": [
+        {
+          "id": "T1",
+          "name": "Define NetworkError types",
+          "depends_on": [],
+          "status": "done",
+          "files": {
+            "create": ["crates/raft/src/network/error.rs"],
+            "modify": []
+          },
+          "notes": "Completed. NetworkError enum with variants: ConnectionFailed, Timeout, RpcFailed, Serialization, Deserialization, NodeNotFound, MaxRetriesExceeded. Includes is_transient() method and comprehensive tests."
+        },
+        {
+          "id": "T2",
+          "name": "Error type conversions",
+          "depends_on": ["T1"],
+          "status": "done",
+          "files": {
+            "create": ["crates/raft/src/network/error_conversions.rs"],
+            "modify": ["crates/raft/src/network/mod.rs"]
+          },
+          "notes": "Completed. Conversion chain: tonic::Status → NetworkError → openraft::RPCError. Helper functions with node context. 35+ tests covering all gRPC status codes."
+        }
       ]
     },
-    "server_implementation": {
+    {
+      "id": "P1",
+      "name": "Protobuf Foundation",
+      "description": "Define protobuf schema, generate Rust types, and implement type conversions",
+      "tasks": [
+        {
+          "id": "T3",
+          "name": "Define Raft protobuf schema",
+          "depends_on": [],
+          "status": "done",
+          "files": {
+            "create": ["crates/raft/proto/raft.proto"],
+            "modify": []
+          },
+          "notes": "Completed 2025-11-03. raft.proto (246 lines) defines VoteRequest, VoteResponse, AppendEntriesRequest, AppendEntriesResponse, InstallSnapshotRequest, InstallSnapshotResponse, LogEntry, and RaftService."
+        },
+        {
+          "id": "T4",
+          "name": "Generate Rust types from proto",
+          "depends_on": ["T3"],
+          "status": "done",
+          "files": {
+            "create": ["crates/raft/build.rs", "crates/raft/src/proto/mod.rs"],
+            "modify": []
+          },
+          "notes": "Completed 2025-11-03. tonic-build generates Rust types, 20 proto validation tests passing."
+        },
+        {
+          "id": "T5",
+          "name": "Protobuf type conversions",
+          "depends_on": ["T4"],
+          "status": "in_progress",
+          "files": {
+            "create": ["crates/raft/src/proto/conversions.rs", "crates/raft/tests/proto_conversions_test.rs"],
+            "modify": []
+          },
+          "notes": "Stubs created in src/proto/conversions.rs, 36 tests written in tests/proto_conversions_test.rs. Awaiting implementation of bidirectional conversions between protobuf and OpenRaft types."
+        },
+        {
+          "id": "T6",
+          "name": "Test proto serialization",
+          "depends_on": ["T5"],
+          "status": "pending",
+          "files": {
+            "create": [],
+            "modify": ["crates/raft/tests/proto_conversions_test.rs"]
+          },
+          "notes": "Round-trip serialization tests. Verify binary encoding size is reasonable."
+        }
+      ]
+    },
+    {
+      "id": "P2",
       "name": "gRPC Server Implementation",
       "description": "Implement gRPC service for receiving Raft RPC messages",
-      "order": 2,
-      "dependencies": ["protobuf_schema"],
-      "estimated_hours": "4-5",
       "tasks": [
-        "implement_raft_service",
-        "handle_vote_request",
-        "handle_append_entries",
-        "handle_install_snapshot",
-        "connection_lifecycle"
-      ],
-      "files_affected": [
-        "crates/raft/src/grpc_server.rs",
-        "crates/raft/src/lib.rs"
-      ],
-      "success_criteria": [
-        "gRPC server starts on port 7379",
-        "Vote request handler returns vote response",
-        "Append entries handler returns success/failure",
-        "Install snapshot handler streams chunks"
+        {
+          "id": "T7",
+          "name": "Implement Raft gRPC service",
+          "depends_on": ["T5"],
+          "status": "pending",
+          "files": {
+            "create": ["crates/raft/src/grpc_server.rs"],
+            "modify": ["crates/raft/src/lib.rs"]
+          },
+          "notes": "RaftService struct implements raft_proto::raft_server::Raft. vote, append_entries, install_snapshot handlers."
+        },
+        {
+          "id": "T8",
+          "name": "Implement vote request handler",
+          "depends_on": ["T7"],
+          "status": "pending",
+          "files": {
+            "modify": ["crates/raft/src/grpc_server.rs"]
+          },
+          "notes": "Compares term with local state, returns vote_granted if candidate log is up-to-date."
+        },
+        {
+          "id": "T9",
+          "name": "Implement append entries handler",
+          "depends_on": ["T8"],
+          "status": "pending",
+          "files": {
+            "modify": ["crates/raft/src/grpc_server.rs"]
+          },
+          "notes": "Validates prev_log_index and prev_log_term, appends new entries, updates commit index."
+        },
+        {
+          "id": "T10",
+          "name": "Implement install snapshot handler",
+          "depends_on": ["T9"],
+          "status": "pending",
+          "files": {
+            "modify": ["crates/raft/src/grpc_server.rs"]
+          },
+          "notes": "Receives snapshot data chunks, assembles into complete snapshot, applies to state machine."
+        },
+        {
+          "id": "T11",
+          "name": "Manage connection lifecycle",
+          "depends_on": ["T10"],
+          "status": "pending",
+          "files": {
+            "modify": ["crates/raft/src/grpc_server.rs"]
+          },
+          "notes": "Server binds to port 7379, graceful shutdown on SIGTERM, connection count logging."
+        }
       ]
     },
-    "client_implementation": {
+    {
+      "id": "P3",
       "name": "gRPC Client Implementation",
       "description": "Implement client for sending Raft RPC to peers",
-      "order": 3,
-      "dependencies": ["protobuf_schema", "server_implementation"],
-      "estimated_hours": "3-4",
       "tasks": [
-        "implement_grpc_client",
-        "connection_pool",
-        "retry_logic",
-        "timeout_handling"
-      ],
-      "files_affected": [
-        "crates/raft/src/grpc_client.rs"
-      ],
-      "success_criteria": [
-        "Client can connect to all peer nodes",
-        "Requests timeout after 10 seconds",
-        "Retry with exponential backoff (max 3 attempts)",
-        "Connection pool maintains active connections"
+        {
+          "id": "T12",
+          "name": "Implement gRPC client wrapper",
+          "depends_on": ["T5", "T2"],
+          "status": "pending",
+          "files": {
+            "create": ["crates/raft/src/grpc_client.rs"],
+            "modify": []
+          },
+          "notes": "GrpcClient implements Clone + Send + Sync. Can connect to server at address. Methods for each RPC type."
+        },
+        {
+          "id": "T13",
+          "name": "Implement connection pool",
+          "depends_on": ["T12"],
+          "status": "pending",
+          "files": {
+            "create": ["crates/raft/src/connection_pool.rs"],
+            "modify": []
+          },
+          "notes": "HashMap<NodeId, GrpcClient>, lazy connection establishment, connection reuse."
+        },
+        {
+          "id": "T14",
+          "name": "Implement retry with backoff",
+          "depends_on": ["T13"],
+          "status": "pending",
+          "files": {
+            "modify": ["crates/raft/src/grpc_client.rs"]
+          },
+          "notes": "Max 3 retry attempts, exponential backoff (1s, 2s, 4s), returns error after all retries exhausted."
+        },
+        {
+          "id": "T15",
+          "name": "Implement timeout handling",
+          "depends_on": ["T14"],
+          "status": "pending",
+          "files": {
+            "modify": ["crates/raft/src/grpc_client.rs"]
+          },
+          "notes": "Vote/AppendEntries timeout: 10 seconds, InstallSnapshot timeout: 30 seconds, Connection timeout: 5 seconds."
+        }
       ]
     },
-    "raft_network_trait": {
+    {
+      "id": "P4",
       "name": "RaftNetwork Integration",
       "description": "Implement openraft::RaftNetwork trait to replace StubNetwork",
-      "order": 4,
-      "dependencies": ["client_implementation"],
-      "estimated_hours": "3-4",
       "tasks": [
-        "implement_raft_network_trait",
-        "replace_stub_network",
-        "error_mapping",
-        "integration_tests"
-      ],
-      "files_affected": [
-        "crates/kv/src/raft_node.rs"
-      ],
-      "success_criteria": [
-        "RaftNetwork trait fully implemented",
-        "Sends vote requests via gRPC",
-        "Sends append entries via gRPC",
-        "Sends install snapshot via gRPC",
-        "2-node cluster test passes"
+        {
+          "id": "T16",
+          "name": "Implement RaftNetwork trait",
+          "depends_on": ["T11", "T15"],
+          "status": "pending",
+          "files": {
+            "create": ["crates/raft/src/network.rs"],
+            "modify": ["crates/kv/src/raft_node.rs"]
+          },
+          "notes": "send_vote(), send_append_entries(), send_install_snapshot() call gRPC client. Returns Result with proper error types."
+        },
+        {
+          "id": "T17",
+          "name": "Replace StubNetwork",
+          "depends_on": ["T16"],
+          "status": "pending",
+          "files": {
+            "modify": ["crates/kv/src/raft_node.rs"]
+          },
+          "notes": "StubNetworkFactory replaced with GrpcNetworkFactory. Existing tests still pass."
+        },
+        {
+          "id": "T18",
+          "name": "Integration tests",
+          "depends_on": ["T17"],
+          "status": "pending",
+          "files": {
+            "create": ["crates/raft/tests/grpc_tests.rs"],
+            "modify": []
+          },
+          "notes": "2-node cluster forms, leader election works via gRPC, log replication works via gRPC."
+        }
       ]
     }
-  },
-
-  "tasks": {
-    "define_raft_proto": {
-      "id": "grpc_1",
-      "name": "Define Raft protobuf schema",
-      "phase": "protobuf_schema",
-      "order": 1,
-      "estimated_hours": "1",
-      "description": "Create raft.proto with all Raft RPC message types",
-      "files": ["crates/raft/proto/raft.proto"],
-      "dependencies": [],
-      "acceptance_criteria": [
-        "message VoteRequest { uint64 node_id = 1; uint64 term = 2; uint64 last_log_index = 3; uint64 last_log_term = 4; }",
-        "message VoteResponse { uint64 node_id = 1; uint64 term = 2; bool vote_granted = 3; }",
-        "message AppendEntriesRequest { uint64 node_id = 1; uint64 term = 2; uint64 prev_log_index = 3; uint64 prev_log_term = 4; uint64 commit_index = 5; repeated Entry entries = 6; }",
-        "message AppendEntriesResponse { uint64 node_id = 1; uint64 term = 2; bool success = 3; }",
-        "message InstallSnapshotRequest { uint64 node_id = 1; uint64 term = 2; uint64 last_included_index = 3; uint64 last_included_term = 4; bytes data = 5; }",
-        "message InstallSnapshotResponse { uint64 node_id = 1; uint64 term = 2; bool success = 3; }"
-      ]
-    },
-    "generate_rust_types": {
-      "id": "grpc_2",
-      "name": "Generate Rust types from proto",
-      "phase": "protobuf_schema",
-      "order": 2,
-      "estimated_hours": "0.5",
-      "description": "Use tonic-build to generate Rust types from raft.proto",
-      "files": ["generated"],
-      "dependencies": ["define_raft_proto"],
-      "acceptance_criteria": [
-        "cargo build succeeds",
-        "Generated types implement tonic::Codable",
-        "prost_build dependency correct"
-      ]
-    },
-    "test_serialization": {
-      "id": "grpc_3",
-      "name": "Test proto serialization",
-      "phase": "protobuf_schema",
-      "order": 3,
-      "estimated_hours": "0.5",
-      "description": "Write tests for proto message serialization/deserialization",
-      "files": ["crates/raft/tests/proto_tests.rs"],
-      "dependencies": ["generate_rust_types"],
-      "acceptance_criteria": [
-        "Round-trip serialization test passes",
-        "Binary encoding size reasonable"
-      ]
-    },
-    "implement_raft_service": {
-      "id": "grpc_4",
-      "name": "Implement Raft gRPC service",
-      "phase": "server_implementation",
-      "order": 1,
-      "estimated_hours": "1.5",
-      "description": "Create RaftService that implements the generated gRPC service trait",
-      "files": ["crates/raft/src/grpc_server.rs"],
-      "dependencies": ["protobuf_schema"],
-      "acceptance_criteria": [
-        "RaftService struct implements raft_proto::raft_server::Raft",
-        "vote handler accepts VoteRequest, returns VoteResponse",
-        "append_entries handler accepts request, returns response",
-        "install_snapshot handler accepts streaming request"
-      ]
-    },
-    "handle_vote_request": {
-      "id": "grpc_5",
-      "name": "Implement vote request handler",
-      "phase": "server_implementation",
-      "order": 2,
-      "estimated_hours": "1",
-      "description": "Handle incoming vote requests and return vote responses",
-      "files": ["crates/raft/src/grpc_server.rs"],
-      "dependencies": ["implement_raft_service"],
-      "acceptance_criteria": [
-        "Compares term with local state",
-        "Returns vote_granted if candidate log is up-to-date",
-        "Updates term if higher than local"
-      ]
-    },
-    "handle_append_entries": {
-      "id": "grpc_6",
-      "name": "Implement append entries handler",
-      "phase": "server_implementation",
-      "order": 3,
-      "estimated_hours": "1.5",
-      "description": "Handle incoming append entries requests",
-      "files": ["crates/raft/src/grpc_server.rs"],
-      "dependencies": ["handle_vote_request"],
-      "acceptance_criteria": [
-        "Validates prev_log_index and prev_log_term",
-        "Appends new entries to log",
-        "Updates commit index if majority acknowledged",
-        "Returns success/failure response"
-      ]
-    },
-    "handle_install_snapshot": {
-      "id": "grpc_7",
-      "name": "Implement install snapshot handler",
-      "phase": "server_implementation",
-      "order": 4,
-      "estimated_hours": "1",
-      "description": "Handle incoming install snapshot requests for log compaction",
-      "files": ["crates/raft/src/grpc_server.rs"],
-      "dependencies": ["handle_append_entries"],
-      "acceptance_criteria": [
-        "Receives snapshot data chunks",
-        "Assembles chunks into complete snapshot",
-        "Applies snapshot to state machine",
-        "Updates log to include snapshot metadata"
-      ]
-    },
-    "connection_lifecycle": {
-      "id": "grpc_8",
-      "name": "Manage connection lifecycle",
-      "phase": "server_implementation",
-      "order": 5,
-      "estimated_hours": "0.5",
-      "description": "Handle server start/stop and graceful shutdown",
-      "files": ["crates/raft/src/grpc_server.rs"],
-      "dependencies": ["handle_install_snapshot"],
-      "acceptance_criteria": [
-        "Server binds to port 7379",
-        "Graceful shutdown on SIGTERM",
-        "Connection count logging"
-      ]
-    },
-    "implement_grpc_client": {
-      "id": "grpc_9",
-      "name": "Implement gRPC client wrapper",
-      "phase": "client_implementation",
-      "order": 1,
-      "estimated_hours": "1.5",
-      "description": "Create GrpcClient wrapper around generated client",
-      "files": ["crates/raft/src/grpc_client.rs"],
-      "dependencies": ["protobuf_schema"],
-      "acceptance_criteria": [
-        "GrpcClient implements Clone + Send + Sync",
-        "Can connect to server at address",
-        "Methods for each RPC type"
-      ]
-    },
-    "connection_pool": {
-      "id": "grpc_10",
-      "name": "Implement connection pool",
-      "phase": "client_implementation",
-      "order": 2,
-      "estimated_hours": "1",
-      "description": "Maintain pool of connections to peer nodes",
-      "files": ["crates/raft/src/grpc_client.rs"],
-      "dependencies": ["implement_grpc_client"],
-      "acceptance_criteria": [
-        "HashMap<NodeId, GrpcClient>",
-        "Lazy connection establishment",
-        "Connection reuse"
-      ]
-    },
-    "retry_logic": {
-      "id": "grpc_11",
-      "name": "Implement retry with backoff",
-      "phase": "client_implementation",
-      "order": 3,
-      "estimated_hours": "1",
-      "description": "Add retry logic with exponential backoff for failed requests",
-      "files": ["crates/raft/src/grpc_client.rs"],
-      "dependencies": ["connection_pool"],
-      "acceptance_criteria": [
-        "Max 3 retry attempts",
-        "Exponential backoff (1s, 2s, 4s)",
-        "Returns error after all retries exhausted"
-      ]
-    },
-    "timeout_handling": {
-      "id": "grpc_12",
-      "name": "Implement timeout handling",
-      "phase": "client_implementation",
-      "order": 4,
-      "estimated_hours": "0.5",
-      "description": "Add request timeouts per RPC type",
-      "files": ["crates/raft/src/grpc_client.rs"],
-      "dependencies": ["retry_logic"],
-      "acceptance_criteria": [
-        "Vote/AppendEntries timeout: 10 seconds",
-        "InstallSnapshot timeout: 30 seconds",
-        "Connection timeout: 5 seconds"
-      ]
-    },
-    "implement_raft_network_trait": {
-      "id": "grpc_13",
-      "name": "Implement RaftNetwork trait",
-      "phase": "raft_network_trait",
-      "order": 1,
-      "estimated_hours": "1.5",
-      "description": "Implement openraft::RaftNetwork<RaftTypeConfig> using gRPC client",
-      "files": ["crates/kv/src/raft_node.rs"],
-      "dependencies": ["client_implementation"],
-      "acceptance_criteria": [
-        "send_vote() calls gRPC client",
-        "send_append_entries() calls gRPC client",
-        "send_install_snapshot() calls gRPC client",
-        "Returns Result with proper error types"
-      ]
-    },
-    "replace_stub_network": {
-      "id": "grpc_14",
-      "name": "Replace StubNetwork",
-      "phase": "raft_network_trait",
-      "order": 2,
-      "estimated_hours": "1",
-      "description": "Replace existing StubNetwork implementation with gRPC version",
-      "files": ["crates/kv/src/raft_node.rs"],
-      "dependencies": ["implement_raft_network_trait"],
-      "acceptance_criteria": [
-        "StubNetworkFactory replaced with GrpcNetworkFactory",
-        "StubNetworkConnection replaced with GrpcNetworkConnection",
-        "Existing tests still pass"
-      ]
-    },
-    "error_mapping": {
-      "id": "grpc_15",
-      "name": "Map gRPC errors to RaftError",
-      "phase": "raft_network_trait",
-      "order": 3,
-      "estimated_hours": "0.5",
-      "description": "Convert tonic::Status to openraft::RaftError",
-      "files": ["crates/kv/src/raft_node.rs"],
-      "dependencies": ["replace_stub_network"],
-      "acceptance_criteria": [
-        "Connection errors -> RaftError::Network",
-        "Timeout errors -> RaftError::Timeout",
-        "RPC errors properly propagated"
-      ]
-    },
-    "integration_tests": {
-      "id": "grpc_16",
-      "name": "Integration tests",
-      "phase": "raft_network_trait",
-      "order": 4,
-      "estimated_hours": "1",
-      "description": "Test 2-node cluster with gRPC transport",
-      "files": ["crates/raft/tests/grpc_tests.rs"],
-      "dependencies": ["error_mapping"],
-      "acceptance_criteria": [
-        "2-node cluster forms",
-        "Leader election works via gRPC",
-        "Log replication works via gRPC",
-        "No message loss under normal conditions"
-      ]
-    }
-  }
+  ]
 }
