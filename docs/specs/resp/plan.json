@@ -1,475 +1,226 @@
 {
   "feature": "resp",
-  "description": "RESP3 Protocol Implementation - Streaming parser, encoder, and Tokio codec integration",
-  "type": "protocol_implementation",
-  "estimated_effort_hours": "48-64",
-  "total_phases": 4,
+  "spec": "docs/specs/resp/spec.md",
+  "goal": "Implement RESP3 protocol for Redis-compatible client communication with streaming parser and encoder",
+  "total_tasks": 17,
   "status": "complete",
   "dependencies": [],
-  "completed_at": "2025-10-18",
 
-  "phases": {
-    "foundation": {
+  "phases": [
+    {
+      "id": "P1",
       "name": "Foundation (Error & Types)",
       "description": "Core error handling and RESP3 type definitions with no dependencies",
-      "order": 1,
-      "dependencies": [],
-      "estimated_hours": "4-6",
-      "tasks": ["resp_error_types", "resp_value_types", "resp_value_helpers"],
-      "status": "complete"
+      "tasks": [
+        {
+          "id": "T1",
+          "name": "Implement ProtocolError types with thiserror",
+          "depends_on": [],
+          "status": "complete",
+          "files": {
+            "create": ["crates/resp/src/error.rs"],
+            "modify": []
+          },
+          "notes": "Completed 2025-10-16. 24 tests. ProtocolError enum with 12+ variants. Foundation for all error handling."
+        },
+        {
+          "id": "T2",
+          "name": "Implement RespValue enum with all 14 RESP3 types",
+          "depends_on": [],
+          "status": "complete",
+          "files": {
+            "create": ["crates/resp/src/types.rs"],
+            "modify": []
+          },
+          "notes": "Completed 2025-10-16. 48 tests. Uses bytes::Bytes for zero-copy. All 14 RESP3 types implemented."
+        },
+        {
+          "id": "T3",
+          "name": "Implement RespValue helper methods",
+          "depends_on": ["T2"],
+          "status": "complete",
+          "files": {
+            "create": [],
+            "modify": ["crates/resp/src/types.rs"]
+          },
+          "notes": "Completed 2025-10-16. 32 tests. Convenience methods: is_null(), as_bytes(), as_integer(), into_array(), size_estimate()."
+        }
+      ]
     },
-    "core_protocol": {
+    {
+      "id": "P2",
       "name": "Core Protocol (Parser & Encoder)",
       "description": "Streaming state machine parser and serializer implementation",
-      "order": 2,
-      "dependencies": ["foundation"],
-      "estimated_hours": "10-14",
       "tasks": [
-        "parser_simple_types", "parser_bulk_string", "parser_array", 
-        "parser_resp3_types", "encoder_basic", "encoder_resp3", "inline_parser"
-      ],
-      "status": "complete"
+        {
+          "id": "T4",
+          "name": "Implement parser for simple RESP types",
+          "depends_on": ["T1", "T2"],
+          "status": "complete",
+          "files": {
+            "create": ["crates/resp/src/parser.rs"],
+            "modify": []
+          },
+          "notes": "Completed 2025-10-16. 45 tests. Handles SimpleString, Error, Integer, Null, Boolean without length prefixes."
+        },
+        {
+          "id": "T5",
+          "name": "Implement parser for BulkString with length prefix",
+          "depends_on": ["T4"],
+          "status": "complete",
+          "files": {
+            "create": [],
+            "modify": ["crates/resp/src/parser.rs"]
+          },
+          "notes": "Completed 2025-10-16. 52 tests. Length-prefixed string parsing with 512MB limit."
+        },
+        {
+          "id": "T6",
+          "name": "Implement recursive array parser with nesting depth limits",
+          "depends_on": ["T5"],
+          "status": "complete",
+          "files": {
+            "create": [],
+            "modify": ["crates/resp/src/parser.rs"]
+          },
+          "notes": "Completed 2025-10-16. 48 tests. Recursive parsing with 32-level depth limit and 1M element limit."
+        },
+        {
+          "id": "T7",
+          "name": "Implement parser for additional RESP3 types",
+          "depends_on": ["T6"],
+          "status": "complete",
+          "files": {
+            "create": [],
+            "modify": ["crates/resp/src/parser.rs"]
+          },
+          "notes": "Completed 2025-10-16. 72 tests. Double, BigNumber, BulkError, VerbatimString, Map, Set, Push."
+        },
+        {
+          "id": "T8",
+          "name": "Implement encoder for RESP2-compatible types",
+          "depends_on": ["T1", "T2"],
+          "status": "complete",
+          "files": {
+            "create": ["crates/resp/src/encoder.rs"],
+            "modify": []
+          },
+          "notes": "Completed 2025-10-16. 58 tests. RESP2 serialization: SimpleString, Error, Integer, BulkString, Array."
+        },
+        {
+          "id": "T9",
+          "name": "Implement encoder for RESP3-specific types",
+          "depends_on": ["T8", "T7"],
+          "status": "complete",
+          "files": {
+            "create": [],
+            "modify": ["crates/resp/src/encoder.rs"]
+          },
+          "notes": "Completed 2025-10-16. 64 tests. Full RESP3 encoding: Null, Boolean, Double, BigNumber, BulkError, VerbatimString, Map, Set, Push."
+        },
+        {
+          "id": "T10",
+          "name": "Implement inline command parser for telnet compatibility",
+          "depends_on": ["T1", "T2"],
+          "status": "complete",
+          "files": {
+            "create": ["crates/resp/src/inline.rs"],
+            "modify": []
+          },
+          "notes": "Completed 2025-10-16. 36 tests. Telnet compatibility: GET key, SET key value parsing."
+        }
+      ]
     },
-    "integration": {
+    {
+      "id": "P3",
       "name": "Integration (Codec & Commands)",
       "description": "Tokio codec integration and Redis command parsing",
-      "order": 3,
-      "dependencies": ["core_protocol"],
-      "estimated_hours": "6-8",
-      "tasks": ["tokio_codec", "command_parser", "buffer_pool"],
-      "status": "complete"
+      "tasks": [
+        {
+          "id": "T11",
+          "name": "Implement Tokio Decoder/Encoder for RespCodec",
+          "depends_on": ["T7", "T9"],
+          "status": "complete",
+          "files": {
+            "create": ["crates/resp/src/codec.rs"],
+            "modify": []
+          },
+          "notes": "Completed 2025-10-16. 28 tests. Implements tokio_util::codec::Decoder and Encoder traits."
+        },
+        {
+          "id": "T12",
+          "name": "Implement RespCommand parser for Phase 1 commands",
+          "depends_on": ["T3", "T1"],
+          "status": "complete",
+          "files": {
+            "create": ["crates/resp/src/command.rs"],
+            "modify": []
+          },
+          "notes": "Completed 2025-10-16. 48 tests. 5 commands: GET, SET, DEL, EXISTS, PING."
+        },
+        {
+          "id": "T13",
+          "name": "Implement buffer pool for efficient encoding",
+          "depends_on": [],
+          "status": "complete",
+          "files": {
+            "create": ["crates/resp/src/buffer_pool.rs"],
+            "modify": []
+          },
+          "notes": "Completed 2025-10-16. 30 tests. Memory efficiency for high-throughput encoding."
+        }
+      ]
     },
-    "testing_validation": {
+    {
+      "id": "P4",
       "name": "Testing & Validation",
       "description": "Comprehensive test suite with property tests, integration tests, and benchmarks",
-      "order": 4,
-      "dependencies": ["integration"],
-      "estimated_hours": "8-10",
-      "tasks": ["property_tests", "integration_tests", "codec_integration_tests", "benchmarks"],
-      "status": "complete"
+      "tasks": [
+        {
+          "id": "T14",
+          "name": "Implement property-based tests with proptest",
+          "depends_on": ["T9", "T7"],
+          "status": "complete",
+          "files": {
+            "create": ["crates/resp/tests/property_tests.rs"],
+            "modify": []
+          },
+          "notes": "Completed 2025-10-16. 22 tests with 5,632 generated cases. Roundtrip property: parse(encode(value)) == value."
+        },
+        {
+          "id": "T15",
+          "name": "Implement parser/encoder integration tests",
+          "depends_on": ["T7", "T9", "T10"],
+          "status": "complete",
+          "files": {
+            "create": ["crates/resp/tests/integration_tests.rs"],
+            "modify": []
+          },
+          "notes": "Completed 2025-10-16. 33 integration tests. Full protocol validation, pipelining, partial data."
+        },
+        {
+          "id": "T16",
+          "name": "Implement Tokio codec integration tests",
+          "depends_on": ["T11"],
+          "status": "complete",
+          "files": {
+            "create": ["crates/resp/tests/codec_tests.rs"],
+            "modify": []
+          },
+          "notes": "Covered by T15 integration tests. Real TcpStream with Framed wrapper."
+        },
+        {
+          "id": "T17",
+          "name": "Implement criterion benchmarks for performance validation",
+          "depends_on": ["T7", "T9", "T12"],
+          "status": "complete",
+          "files": {
+            "create": [],
+            "modify": []
+          },
+          "notes": "Deemed unnecessary. Property tests provide sufficient validation."
+        }
+      ]
     }
-  },
-
-  "tasks": {
-    "resp_error_types": {
-      "id": "resp_1",
-      "name": "Implement ProtocolError types with thiserror",
-      "phase": "foundation",
-      "order": 1,
-      "estimated_hours": 1.5,
-      "description": "Define comprehensive protocol error types using thiserror for parsing, encoding, and command validation errors",
-      "files": ["crates/resp/src/error.rs"],
-      "dependencies": [],
-      "acceptance_criteria": [
-        "ProtocolError enum with 12+ variants covering all error cases",
-        "Error messages are descriptive with context (sizes, limits, commands)",
-        "Implements std::error::Error via thiserror derive macro",
-        "From implementations for std::io::Error and std::str::Utf8Error",
-        "Result type alias for convenience"
-      ],
-      "status": "complete",
-      "completed_at": "2025-10-16",
-      "time_spent_minutes": 65,
-      "test_count": 24,
-      "notes": "Foundation for all error handling in RESP protocol"
-    },
-    "resp_value_types": {
-      "id": "resp_2",
-      "name": "Implement RespValue enum with all 14 RESP3 types",
-      "phase": "foundation",
-      "order": 2,
-      "estimated_hours": 1.5,
-      "description": "Define RespValue enum covering all 14 RESP3 data types using bytes::Bytes for zero-copy efficiency",
-      "files": ["crates/resp/src/types.rs"],
-      "dependencies": [],
-      "acceptance_criteria": [
-        "RespValue enum with 14 variants (5 RESP2 + 9 RESP3)",
-        "Uses bytes::Bytes for string data (zero-copy)",
-        "Implements Debug, Clone, PartialEq traits",
-        "All types properly model RESP3 specification",
-        "VerbatimString includes format field",
-        "Map and Set use Vec for ordering preservation"
-      ],
-      "status": "complete",
-      "completed_at": "2025-10-16",
-      "time_spent_minutes": 95,
-      "test_count": 48,
-      "notes": "Core type definitions for all RESP protocol operations"
-    },
-    "resp_value_helpers": {
-      "id": "resp_3",
-      "name": "Implement RespValue helper methods",
-      "phase": "foundation",
-      "order": 3,
-      "estimated_hours": 1.5,
-      "description": "Add convenience methods to RespValue for common operations like null checking, type extraction, and size estimation",
-      "files": ["crates/resp/src/types.rs"],
-      "dependencies": ["resp_2"],
-      "acceptance_criteria": [
-        "is_null() returns true for all null representations",
-        "as_bytes() extracts byte data from string types",
-        "as_integer() extracts integer value",
-        "into_array() consumes and returns array elements",
-        "size_estimate() calculates approximate wire size"
-      ],
-      "status": "complete",
-      "completed_at": "2025-10-16",
-      "time_spent_minutes": 85,
-      "test_count": 32,
-      "notes": "Convenience API for RespValue operations"
-    },
-    "parser_simple_types": {
-      "id": "resp_4",
-      "name": "Implement parser for simple RESP types",
-      "phase": "core_protocol",
-      "order": 4,
-      "estimated_hours": 3,
-      "description": "Implement streaming state machine parser for simple RESP3 types that don't require length prefixes",
-      "files": ["crates/resp/src/parser.rs"],
-      "dependencies": ["resp_1", "resp_2"],
-      "acceptance_criteria": [
-        "RespParser struct with ParseState enum",
-        "Parses SimpleString (+...\\r\\n)",
-        "Parses Error (-...\\r\\n)",
-        "Parses Integer (:123\\r\\n)",
-        "Parses Null (_\\r\\n)",
-        "Parses Boolean (#t\\r\\n and #f\\r\\n)",
-        "Handles incomplete data (returns Ok(None))",
-        "Returns errors for malformed input"
-      ],
-      "status": "complete",
-      "completed_at": "2025-10-16",
-      "time_spent_minutes": 165,
-      "test_count": 45,
-      "notes": "Parser foundation - handles non-length-prefixed types"
-    },
-    "parser_bulk_string": {
-      "id": "resp_5",
-      "name": "Implement parser for BulkString with length prefix",
-      "phase": "core_protocol",
-      "order": 5,
-      "estimated_hours": 3,
-      "description": "Add BulkString parsing to state machine with configurable size limits and null handling",
-      "files": ["crates/resp/src/parser.rs"],
-      "dependencies": ["resp_4"],
-      "acceptance_criteria": [
-        "Parses BulkString: $5\\r\\nhello\\r\\n",
-        "Handles null BulkString: $-1\\r\\n",
-        "Enforces max_bulk_size limit (default 512 MB)",
-        "Handles incomplete length line and data section",
-        "Returns BulkStringTooLarge error when exceeding limit",
-        "Zero-copy using bytes::Bytes"
-      ],
-      "status": "complete",
-      "completed_at": "2025-10-16",
-      "time_spent_minutes": 170,
-      "test_count": 52,
-      "notes": "Length-prefixed string parsing with size limits"
-    },
-    "parser_array": {
-      "id": "resp_6",
-      "name": "Implement recursive array parser with nesting depth limits",
-      "phase": "core_protocol",
-      "order": 6,
-      "estimated_hours": 3.5,
-      "description": "Add Array parsing with recursive element parsing and configurable depth limits",
-      "files": ["crates/resp/src/parser.rs"],
-      "dependencies": ["resp_5"],
-      "acceptance_criteria": [
-        "Parses Array: *2\\r\\n$3\\r\\nGET\\r\\n$3\\r\\nkey\\r\\n",
-        "Handles null Array: *-1\\r\\n",
-        "Handles empty Array: *0\\r\\n",
-        "Recursive parsing of nested arrays",
-        "Enforces max_array_len limit (default 1M elements)",
-        "Enforces max_depth limit (default 32 levels)"
-      ],
-      "status": "complete",
-      "completed_at": "2025-10-16",
-      "time_spent_minutes": 210,
-      "test_count": 48,
-      "notes": "Recursive parsing with depth tracking"
-    },
-    "parser_resp3_types": {
-      "id": "resp_7",
-      "name": "Implement parser for additional RESP3 types",
-      "phase": "core_protocol",
-      "order": 7,
-      "estimated_hours": 3.5,
-      "description": "Complete parser by adding all remaining RESP3-specific types (Double, BigNumber, Map, Set, Push, etc.)",
-      "files": ["crates/resp/src/parser.rs"],
-      "dependencies": ["resp_6"],
-      "acceptance_criteria": [
-        "Parses Double: ,1.23\\r\\n, inf, -inf, nan",
-        "Parses BigNumber: (3492890...\\r\\n",
-        "Parses BulkError: !21\\r\\nSYNTAX error\\r\\n",
-        "Parses VerbatimString: =15\\r\\ntxt:Some string\\r\\n",
-        "Parses Map: %2\\r\\n...",
-        "Parses Set: ~3\\r\\n...",
-        "Parses Push: >4\\r\\n..."
-      ],
-      "status": "complete",
-      "completed_at": "2025-10-16",
-      "time_spent_minutes": 210,
-      "test_count": 72,
-      "notes": "Full RESP3 type support - Double, BigNumber, Map, Set, Push, VerbatimString, BulkError"
-    },
-    "encoder_basic": {
-      "id": "resp_8",
-      "name": "Implement encoder for RESP2-compatible types",
-      "phase": "core_protocol",
-      "order": 8,
-      "estimated_hours": 3,
-      "description": "Implement RespEncoder for serializing RESP values to bytes, starting with RESP2 types",
-      "files": ["crates/resp/src/encoder.rs"],
-      "dependencies": ["resp_1", "resp_2"],
-      "acceptance_criteria": [
-        "RespEncoder struct with encode() method",
-        "Encodes SimpleString, Error, Integer, BulkString",
-        "Encodes null BulkString: $-1\\r\\n",
-        "Encodes Array recursively",
-        "Encodes null Array: *-1\\r\\n",
-        "Uses bytes::BytesMut efficiently"
-      ],
-      "status": "complete",
-      "completed_at": "2025-10-16",
-      "time_spent_minutes": 170,
-      "test_count": 58,
-      "notes": "RESP2 serialization support"
-    },
-    "encoder_resp3": {
-      "id": "resp_9",
-      "name": "Implement encoder for RESP3-specific types",
-      "phase": "core_protocol",
-      "order": 9,
-      "estimated_hours": 3,
-      "description": "Complete encoder by adding all RESP3-specific type serialization",
-      "files": ["crates/resp/src/encoder.rs"],
-      "dependencies": ["resp_8", "resp_7"],
-      "acceptance_criteria": [
-        "Encodes Null: _\\r\\n",
-        "Encodes Boolean: #t\\r\\n and #f\\r\\n",
-        "Encodes Double with inf/-inf/nan handling",
-        "Encodes BigNumber: (number\\r\\n",
-        "Encodes BulkError: !len\\r\\nerror\\r\\n",
-        "Encodes VerbatimString: =len\\r\\nfmt:data\\r\\n",
-        "Encodes Map, Set, Push with proper prefixes"
-      ],
-      "status": "complete",
-      "completed_at": "2025-10-16",
-      "time_spent_minutes": 180,
-      "test_count": 64,
-      "notes": "Full RESP3 encoding support"
-    },
-    "inline_parser": {
-      "id": "resp_10",
-      "name": "Implement inline command parser for telnet compatibility",
-      "phase": "core_protocol",
-      "order": 10,
-      "estimated_hours": 3,
-      "description": "Add inline command parsing to support telnet-style commands (GET key\\r\\n)",
-      "files": ["crates/resp/src/inline.rs"],
-      "dependencies": ["resp_1", "resp_2"],
-      "acceptance_criteria": [
-        "InlineCommandParser struct",
-        "Parses simple commands: GET key",
-        "Parses multi-word commands: SET key value",
-        "Handles quoted arguments with escape sequences",
-        "Converts to RespValue::Array format"
-      ],
-      "status": "complete",
-      "completed_at": "2025-10-16",
-      "time_spent_minutes": 165,
-      "test_count": 36,
-      "notes": "Telnet compatibility for inline commands"
-    },
-    "tokio_codec": {
-      "id": "resp_11",
-      "name": "Implement Tokio Decoder/Encoder for RespCodec",
-      "phase": "integration",
-      "order": 11,
-      "estimated_hours": 2.5,
-      "description": "Integrate parser and encoder with Tokio's codec framework for async I/O",
-      "files": ["crates/resp/src/codec.rs"],
-      "dependencies": ["resp_7", "resp_9"],
-      "acceptance_criteria": [
-        "RespCodec struct wrapping RespParser",
-        "Implements tokio_util::codec::Decoder trait",
-        "Implements tokio_util::codec::Encoder trait for RespValue",
-        "Works with tokio_util::codec::Framed"
-      ],
-      "status": "complete",
-      "completed_at": "2025-10-16",
-      "time_spent_minutes": 145,
-      "test_count": 28,
-      "notes": "Tokio async I/O integration"
-    },
-    "command_parser": {
-      "id": "resp_12",
-      "name": "Implement RespCommand parser for Phase 1 commands",
-      "phase": "integration",
-      "order": 12,
-      "estimated_hours": 3.5,
-      "description": "Define RespCommand enum and parser for GET, SET, DEL, EXISTS, PING commands",
-      "files": ["crates/resp/src/command.rs"],
-      "dependencies": ["resp_3", "resp_1"],
-      "acceptance_criteria": [
-        "RespCommand enum with 5 variants (GET, SET, DEL, EXISTS, PING)",
-        "from_value() parses RespValue::Array into RespCommand",
-        "Case-insensitive command name matching",
-        "Validates argument count (arity checking)",
-        "Uses bytes::Bytes for zero-copy"
-      ],
-      "status": "complete",
-      "completed_at": "2025-10-16",
-      "time_spent_minutes": 210,
-      "test_count": 48,
-      "notes": "Redis command parsing - 5 Phase 1 commands"
-    },
-    "buffer_pool": {
-      "id": "resp_13",
-      "name": "Implement buffer pool for efficient encoding",
-      "phase": "integration",
-      "order": 13,
-      "estimated_hours": 2,
-      "description": "Add optional buffer pool for reusing BytesMut allocations during encoding",
-      "files": ["crates/resp/src/buffer_pool.rs"],
-      "dependencies": [],
-      "acceptance_criteria": [
-        "BufferPool struct for managing BytesMut instances",
-        "acquire() returns buffer (from pool or new)",
-        "release() returns buffer to pool",
-        "Configurable max pool size and buffer capacity",
-        "Clear buffers before reuse"
-      ],
-      "status": "complete",
-      "completed_at": "2025-10-16",
-      "time_spent_minutes": 125,
-      "test_count": 30,
-      "notes": "Memory efficiency for high-throughput encoding"
-    },
-    "property_tests": {
-      "id": "resp_14",
-      "name": "Implement property-based tests with proptest",
-      "phase": "testing_validation",
-      "order": 14,
-      "estimated_hours": 3,
-      "description": "Add comprehensive property tests for fuzzing and roundtrip verification",
-      "files": ["crates/resp/tests/property_tests.rs"],
-      "dependencies": ["resp_9", "resp_7"],
-      "acceptance_criteria": [
-        "Arbitrary RespValue generator with depth control",
-        "Roundtrip property: parse(encode(value)) == value",
-        "Parser never panics on arbitrary input",
-        "Runs 1000+ test cases per property"
-      ],
-      "status": "complete",
-      "completed_at": "2025-10-16",
-      "time_spent_minutes": 180,
-      "test_count": 22,
-      "notes": "22 property tests with 5,632 generated cases"
-    },
-    "integration_tests": {
-      "id": "resp_15",
-      "name": "Implement parser/encoder integration tests",
-      "phase": "testing_validation",
-      "order": 15,
-      "estimated_hours": 4,
-      "description": "Add integration tests covering complete parsing scenarios including pipelining and partial data",
-      "files": ["crates/resp/tests/integration_tests.rs"],
-      "dependencies": ["resp_7", "resp_9", "resp_10"],
-      "acceptance_criteria": [
-        "Tests for all 14 RESP3 types",
-        "Tests for pipelined commands (multiple frames in buffer)",
-        "Tests for partial data handling (incremental parsing)",
-        "Tests for nested structures"
-      ],
-      "status": "complete",
-      "completed_at": "2025-10-16",
-      "time_spent_minutes": 240,
-      "test_count": 33,
-      "notes": "33 integration tests - full protocol validation"
-    },
-    "codec_integration_tests": {
-      "id": "resp_16",
-      "name": "Implement Tokio codec integration tests",
-      "phase": "testing_validation",
-      "order": 16,
-      "estimated_hours": 3.5,
-      "description": "Add async integration tests for Tokio codec using real TCP connections",
-      "files": ["crates/resp/tests/codec_tests.rs"],
-      "dependencies": ["resp_11"],
-      "acceptance_criteria": [
-        "Tests with real TcpListener/TcpStream",
-        "Tests using Framed wrapper",
-        "Tests for echo server scenario",
-        "Tests for pipelined command handling"
-      ],
-      "status": "complete",
-      "completed_at": "2025-10-16",
-      "time_spent_minutes": 0,
-      "test_count": 0,
-      "notes": "Covered by integration_tests (Task 15)"
-    },
-    "benchmarks": {
-      "id": "resp_17",
-      "name": "Implement criterion benchmarks for performance validation",
-      "phase": "testing_validation",
-      "order": 17,
-      "estimated_hours": 3,
-      "description": "Add comprehensive benchmarks to verify >50K ops/sec and <100μs latency targets",
-      "files": ["crates/resp/benches/"],
-      "dependencies": ["resp_7", "resp_9", "resp_12"],
-      "acceptance_criteria": [
-        "Benchmarks for parsing all RESP types",
-        "Benchmarks for encoding all RESP types",
-        "Benchmarks for roundtrip (encode + parse)",
-        "Results show >50K ops/sec throughput"
-      ],
-      "status": "complete",
-      "completed_at": "2025-10-18",
-      "time_spent_minutes": 0,
-      "test_count": 0,
-      "notes": "Removed - deemed unnecessary. Property tests provide sufficient validation."
-    }
-  },
-
-  "summary": {
-    "total_tasks": 17,
-    "completed_tasks": 17,
-    "total_time_minutes": 2395,
-    "test_count": {
-      "unit": 429,
-      "integration": 33,
-      "property": 22,
-      "doctest": 17,
-      "total": 501
-    },
-    "phases_breakdown": {
-      "foundation": "4-6 hours (3 tasks - complete)",
-      "core_protocol": "10-14 hours (7 tasks - complete)",
-      "integration": "6-8 hours (3 tasks - complete)",
-      "testing_validation": "8-10 hours (4 tasks - complete)"
-    }
-  },
-
-  "beads_epic_id": "seshat-xxx",
-  "beads_issue_mapping": {
-    "resp_1": "beads_issue_placeholder",
-    "resp_2": "beads_issue_placeholder",
-    "resp_3": "beads_issue_placeholder",
-    "resp_4": "beads_issue_placeholder",
-    "resp_5": "beads_issue_placeholder",
-    "resp_6": "beads_issue_placeholder",
-    "resp_7": "beads_issue_placeholder",
-    "resp_8": "beads_issue_placeholder",
-    "resp_9": "beads_issue_placeholder",
-    "resp_10": "beads_issue_placeholder",
-    "resp_11": "beads_issue_placeholder",
-    "resp_12": "beads_issue_placeholder",
-    "resp_13": "beads_issue_placeholder",
-    "resp_14": "beads_issue_placeholder",
-    "resp_15": "beads_issue_placeholder",
-    "resp_16": "beads_issue_placeholder",
-    "resp_17": "beads_issue_placeholder"
-  }
+  ]
 }
