@@ -1,324 +1,219 @@
 {
+  "spec": "docs/specs/kvservice/spec.md",
   "feature": "kv-service",
   "description": "KV service layer with Redis compatibility (GET, SET, DEL, EXISTS, PING)",
-  "type": "service_implementation",
-  "estimated_effort_hours": "11-13",
-  "total_phases": 4,
   "status": "not_started",
-  "dependencies": ["grpc", "rocksdb"],
+  "estimated_effort_hours": "11-13",
+  "dependencies": ["seshat-2pz", "seshat-5dw"],
 
-  "phases": {
-    "validation": {
+  "phases": [
+    {
+      "id": "T1",
       "name": "Input Validation",
       "description": "Validate key/value sizes and command syntax",
-      "order": 1,
-      "dependencies": [],
-      "estimated_hours": "2-3",
-      "tasks": ["key_size_validation", "value_size_validation", "command_validation"],
-      "files_affected": [
-        "crates/kv/src/validation.rs",
-        "crates/kv/src/service.rs"
-      ],
-      "success_criteria": [
-        "Keys > 256 bytes rejected with ERR key too large",
-        "Values > 64KB rejected with ERR value too large",
-        "Invalid commands rejected with ERR unknown command"
-      ]
+      "tasks": ["T1.1", "T1.2", "T1.3"]
     },
-    "command_handlers": {
+    {
+      "id": "T2",
       "name": "Command Handlers",
       "description": "Implement handler for each Redis command",
-      "order": 2,
-      "dependencies": ["validation"],
-      "estimated_hours": "4-5",
-      "tasks": ["handle_get", "handle_set", "handle_del", "handle_exists", "handle_ping"],
-      "files_affected": [
-        "crates/kv/src/handlers.rs",
-        "crates/kv/src/service.rs"
-      ],
-      "success_criteria": [
-        "GET returns value or nil",
-        "SET returns OK",
-        "DEL returns count of deleted keys",
-        "EXISTS returns count of existing keys",
-        "PING returns PONG"
-      ]
+      "depends_on": ["T1"],
+      "tasks": ["T2.1", "T2.2", "T2.3", "T2.4", "T2.5"]
     },
-    "raft_integration": {
+    {
+      "id": "T3",
       "name": "Raft Integration",
       "description": "Integrate command handlers with RaftNode",
-      "order": 3,
-      "dependencies": ["command_handlers"],
-      "estimated_hours": "3-4",
-      "tasks": ["propose_writes", "read_local_state", "leader_redirection", "error_handling"],
-      "files_affected": [
-        "crates/kv/src/raft_node.rs",
-        "crates/kv/src/service.rs"
-      ],
-      "success_criteria": [
-        "SET/DEL propose operations to Raft",
-        "GET/EXISTS read from local state machine",
-        "Not leader returns MOVED error",
-        "Quorum failure returns NOQUORUM error"
-      ]
+      "depends_on": ["T2"],
+      "tasks": ["T3.1", "T3.2", "T3.3", "T3.4"]
     },
-    "tcp_server": {
+    {
+      "id": "T4",
       "name": "TCP Server",
       "description": "Create TCP server on port 6379",
-      "order": 4,
-      "dependencies": ["raft_integration"],
-      "estimated_hours": "2-3",
-      "tasks": ["bind_port_6379", "resp_codec_framing", "connection_handling", "integration_tests"],
-      "files_affected": [
-        "crates/seshat/src/main.rs",
-        "crates/seshat/src/server.rs"
-      ],
-      "success_criteria": [
-        "Server binds to port 6379",
-        "redis-cli can connect",
-        "Commands work end-to-end"
-      ]
+      "depends_on": ["T3"],
+      "tasks": ["T4.1", "T4.2", "T4.3", "T4.4"]
     }
-  },
+  ],
 
   "tasks": {
-    "key_size_validation": {
-      "id": "kv_1",
+    "T1.1": {
       "name": "Validate key size",
-      "phase": "validation",
-      "order": 1,
-      "estimated_hours": "0.5",
-      "description": "Reject keys > 256 bytes",
-      "files": ["crates/kv/src/validation.rs"],
-      "dependencies": [],
-      "acceptance_criteria": [
+      "description": "Reject keys > 256 bytes with 'ERR key too large'",
+      "acceptance": [
         "Key > 256 bytes returns error",
         "Error message: 'ERR key too large'"
-      ]
-    },
-    "value_size_validation": {
-      "id": "kv_2",
-      "name": "Validate value size",
-      "phase": "validation",
-      "order": 2,
-      "estimated_hours": "0.5",
-      "description": "Reject values > 64KB",
+      ],
       "files": ["crates/kv/src/validation.rs"],
-      "dependencies": ["key_size_validation"],
-      "acceptance_criteria": [
+      "depends_on": []
+    },
+    "T1.2": {
+      "name": "Validate value size",
+      "description": "Reject values > 64KB with 'ERR value too large'",
+      "acceptance": [
         "Value > 65536 bytes returns error",
         "Error message: 'ERR value too large'"
-      ]
-    },
-    "command_validation": {
-      "id": "kv_3",
-      "name": "Validate command syntax",
-      "phase": "validation",
-      "order": 3,
-      "estimated_hours": "1",
-      "description": "Validate RespCommand is valid for Phase 1",
+      ],
       "files": ["crates/kv/src/validation.rs"],
-      "dependencies": ["value_size_validation"],
-      "acceptance_criteria": [
+      "depends_on": ["T1.1"]
+    },
+    "T1.3": {
+      "name": "Validate command syntax",
+      "description": "Validate RespCommand is valid for Phase 1 (GET, SET, DEL, EXISTS, PING)",
+      "acceptance": [
         "Known commands accepted",
         "Unknown commands rejected with 'ERR unknown command'"
-      ]
+      ],
+      "files": ["crates/kv/src/validation.rs"],
+      "depends_on": ["T1.2"]
     },
-    "handle_get": {
-      "id": "kv_4",
+
+    "T2.1": {
       "name": "Implement GET handler",
-      "phase": "command_handlers",
-      "order": 1,
-      "estimated_hours": "1",
       "description": "Implement GET command using local state machine read",
-      "files": ["crates/kv/src/handlers.rs"],
-      "dependencies": ["validation"],
-      "acceptance_criteria": [
+      "acceptance": [
         "Returns bulk string if key exists",
         "Returns null bulk string if key doesn't exist",
-        "Reads from local state machine"
-      ]
-    },
-    "handle_set": {
-      "id": "kv_5",
-      "name": "Implement SET handler",
-      "phase": "command_handlers",
-      "order": 2,
-      "estimated_hours": "1",
-      "description": "Implement SET command with Raft proposal",
+        "Reads from local state machine",
+        "Checks is_leader() before read"
+      ],
       "files": ["crates/kv/src/handlers.rs"],
-      "dependencies": ["handle_get"],
-      "acceptance_criteria": [
+      "depends_on": []
+    },
+    "T2.2": {
+      "name": "Implement SET handler",
+      "description": "Implement SET command with Raft proposal",
+      "acceptance": [
         "Creates Operation::Set",
         "Proposes to Raft cluster",
         "Returns OK on success",
         "Blocks until majority commits"
-      ]
-    },
-    "handle_del": {
-      "id": "kv_6",
-      "name": "Implement DEL handler",
-      "phase": "command_handlers",
-      "order": 3,
-      "estimated_hours": "1",
-      "description": "Implement DEL command with multiple keys (each as separate proposal)",
+      ],
       "files": ["crates/kv/src/handlers.rs"],
-      "dependencies": ["handle_set"],
-      "acceptance_criteria": [
+      "depends_on": ["T2.1"]
+    },
+    "T2.3": {
+      "name": "Implement DEL handler",
+      "description": "Implement DEL command with multiple keys (each as separate proposal)",
+      "acceptance": [
         "Each key gets separate Raft proposal",
         "Returns count of deleted keys",
         "Partial success possible (matching Redis)"
-      ]
-    },
-    "handle_exists": {
-      "id": "kv_7",
-      "name": "Implement EXISTS handler",
-      "phase": "command_handlers",
-      "order": 4,
-      "estimated_hours": "0.5",
-      "description": "Implement EXISTS command",
+      ],
       "files": ["crates/kv/src/handlers.rs"],
-      "dependencies": ["handle_del"],
-      "acceptance_criteria": [
+      "depends_on": ["T2.2"]
+    },
+    "T2.4": {
+      "name": "Implement EXISTS handler",
+      "description": "Implement EXISTS command",
+      "acceptance": [
         "Returns count of existing keys",
         "Checks each key in state machine"
-      ]
-    },
-    "handle_ping": {
-      "id": "kv_8",
-      "name": "Implement PING handler",
-      "phase": "command_handlers",
-      "order": 5,
-      "estimated_hours": "0.5",
-      "description": "Implement PING command (no Raft needed)",
+      ],
       "files": ["crates/kv/src/handlers.rs"],
-      "dependencies": ["handle_exists"],
-      "acceptance_criteria": [
+      "depends_on": ["T2.3"]
+    },
+    "T2.5": {
+      "name": "Implement PING handler",
+      "description": "Implement PING command (no Raft needed)",
+      "acceptance": [
         "Returns PONG",
         "Returns message if provided",
         "Bypasses Raft (fast path)"
-      ]
+      ],
+      "files": ["crates/kv/src/handlers.rs"],
+      "depends_on": ["T2.4"]
     },
-    "propose_writes": {
-      "id": "kv_9",
+
+    "T3.1": {
       "name": "Propose write operations",
-      "phase": "raft_integration",
-      "order": 1,
-      "estimated_hours": "1",
       "description": "Route SET/DEL to RaftNode::propose()",
-      "files": ["crates/kv/src/service.rs"],
-      "dependencies": ["command_handlers"],
-      "acceptance_criteria": [
+      "acceptance": [
         "Operation serialized to Vec<u8>",
         "RaftNode::propose() called",
         "Response returned on commit"
-      ]
-    },
-    "readlocalstate": {
-      "id": "kv_10",
-      "name": "Read from local state machine",
-      "phase": "raft_integration",
-      "order": 2,
-      "estimated_hours": "1",
-      "description": "GET/EXISTS read from local state machine",
+      ],
       "files": ["crates/kv/src/service.rs"],
-      "dependencies": ["propose_writes"],
-      "acceptance_criteria": [
-        "Reads from local OpenRaftMemStateMachine",
+      "depends_on": []
+    },
+    "T3.2": {
+      "name": "Read from local state machine",
+      "description": "GET/EXISTS read from local state machine",
+      "acceptance": [
+        "Reads from local StateMachine",
         "No Raft proposal needed for reads",
         "May be stale during leadership transition"
-      ]
-    },
-    "leader_redirection": {
-      "id": "kv_11",
-      "name": "Handle leader redirection",
-      "phase": "raft_integration",
-      "order": 3,
-      "estimated_hours": "0.5",
-      "description": "Return MOVED error when not leader",
+      ],
       "files": ["crates/kv/src/service.rs"],
-      "dependencies": ["readlocalstate"],
-      "acceptance_criteria": [
+      "depends_on": ["T3.1"]
+    },
+    "T3.3": {
+      "name": "Handle leader redirection",
+      "description": "Return MOVED error when not leader",
+      "acceptance": [
         "Check is_leader() before operations",
         "If not leader, return '-MOVED {node_id}\\r\\n'",
         "Leader ID obtained from RaftNode"
-      ]
+      ],
+      "files": ["crates/kv/src/service.rs"],
+      "depends_on": ["T3.2"]
     },
-    "error_handling": {
-      "id": "kv_12",
+    "T3.4": {
       "name": "Handle error cases",
-      "phase": "raft_integration",
-      "order": 4,
-      "estimated_hours": "1",
       "description": "Map Raft errors to RESP errors",
+      "acceptance": [
+        "NOQUORUM → '-ERR NOQUORUM\\r\\n'",
+        "TIMEOUT → '-ERR timeout\\r\\n'",
+        "STORAGE → '-ERR storage failure\\r\\n'"
+      ],
       "files": ["crates/kv/src/error.rs"],
-      "dependencies": ["leader_redirection"],
-      "acceptance_criteria": [
-        "NOQUORUM -> '-ERR NOQUORUM\\r\\n'",
-        "TIMEOUT -> '-ERR timeout\\r\\n'",
-        "STORAGE -> '-ERR storage failure\\r\\n'"
-      ]
+      "depends_on": ["T3.3"]
     },
-    "bindport6379": {
-      "id": "kv_13",
+
+    "T4.1": {
       "name": "Bind to port 6379",
-      "phase": "tcp_server",
-      "order": 1,
-      "estimated_hours": "0.5",
       "description": "Create TCP listener on port 6379",
-      "files": ["crates/seshat/src/server.rs"],
-      "dependencies": ["raft_integration"],
-      "acceptance_criteria": [
+      "acceptance": [
         "tokio::net::TcpListener::bind('0.0.0.0:6379')",
         "Listens for incoming connections"
-      ]
-    },
-    "respcodecframing": {
-      "id": "kv_14",
-      "name": "RESP codec framing",
-      "phase": "tcp_server",
-      "order": 2,
-      "estimated_hours": "0.5",
-      "description": "Use RespCodec for frame parsing",
+      ],
       "files": ["crates/seshat/src/server.rs"],
-      "dependencies": ["bindport6379"],
-      "acceptance_criteria": [
+      "depends_on": []
+    },
+    "T4.2": {
+      "name": "RESP codec framing",
+      "description": "Use RespCodec for frame parsing",
+      "acceptance": [
         "RespCodec used for decode",
         "Handles partial reads",
         "Handles multiple commands in buffer"
-      ]
-    },
-    "connection_handling": {
-      "id": "kv_15",
-      "name": "Handle connections",
-      "phase": "tcp_server",
-      "order": 3,
-      "estimated_hours": "1",
-      "description": "Accept and handle client connections",
+      ],
       "files": ["crates/seshat/src/server.rs"],
-      "dependencies": ["respcodecframing"],
-      "acceptance_criteria": [
+      "depends_on": ["T4.1"]
+    },
+    "T4.3": {
+      "name": "Handle connections",
+      "description": "Accept and handle client connections",
+      "acceptance": [
         "Accept incoming connections",
         "Spawn task per connection",
         "Handle multiple commands per connection"
-      ]
+      ],
+      "files": ["crates/seshat/src/server.rs"],
+      "depends_on": ["T4.2"]
     },
-    "integration_tests": {
-      "id": "kv_16",
+    "T4.4": {
       "name": "End-to-end tests",
-      "phase": "tcp_server",
-      "order": 4,
-      "estimated_hours": "1",
       "description": "Test complete command flow",
-      "files": ["crates/kv/tests/integration_tests.rs"],
-      "dependencies": ["connection_handling"],
-      "acceptance_criteria": [
+      "acceptance": [
         "SET foo bar returns OK",
         "GET foo returns bar",
         "EXISTS foo returns 1",
         "DEL foo returns 1",
         "PING returns PONG"
-      ]
+      ],
+      "files": ["crates/kv/tests/integration_tests.rs"],
+      "depends_on": ["T4.3"]
     }
   }
 }
