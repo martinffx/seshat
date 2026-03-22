@@ -194,6 +194,7 @@ impl StorageOptions {
             level0_file_num_compaction_trigger: 2, // Aggressive compaction
             write_buffer_size: None,               // Use global setting
             prefix_extractor: None,
+            prefix_length: 0,
         };
 
         options.insert(ColumnFamily::SystemRaftLog, raft_log_opts.clone());
@@ -207,6 +208,7 @@ impl StorageOptions {
             level0_file_num_compaction_trigger: 10,
             write_buffer_size: Some(4 * 1024 * 1024), // 4MB
             prefix_extractor: None,
+            prefix_length: 0,
         };
 
         options.insert(ColumnFamily::SystemRaftState, raft_state_opts.clone());
@@ -222,6 +224,7 @@ impl StorageOptions {
                 level0_file_num_compaction_trigger: 10,
                 write_buffer_size: Some(8 * 1024 * 1024), // 8MB
                 prefix_extractor: None,
+                prefix_length: 0,
             },
         );
 
@@ -235,6 +238,7 @@ impl StorageOptions {
                 level0_file_num_compaction_trigger: 4,
                 write_buffer_size: None, // Use global setting
                 prefix_extractor: Some(SliceTransform::create_fixed_prefix(4)), // 4-byte prefix
+                prefix_length: 4,
             },
         );
 
@@ -267,6 +271,7 @@ impl StorageOptions {
 ///     level0_file_num_compaction_trigger: 4,
 ///     write_buffer_size: None,
 ///     prefix_extractor: None,
+///     prefix_length: 0,
 /// };
 /// ```
 pub struct CFOptions {
@@ -275,6 +280,7 @@ pub struct CFOptions {
     pub level0_file_num_compaction_trigger: i32,
     pub write_buffer_size: Option<usize>,
     pub prefix_extractor: Option<SliceTransform>,
+    pub prefix_length: usize,
 }
 
 impl Clone for CFOptions {
@@ -287,7 +293,8 @@ impl Clone for CFOptions {
             prefix_extractor: self
                 .prefix_extractor
                 .as_ref()
-                .map(|_| SliceTransform::create_fixed_prefix(16)),
+                .map(|_| SliceTransform::create_fixed_prefix(self.prefix_length)),
+            prefix_length: self.prefix_length,
         }
     }
 }
@@ -304,5 +311,76 @@ impl std::fmt::Debug for CFOptions {
             .field("write_buffer_size", &self.write_buffer_size)
             .field("prefix_extractor", &self.prefix_extractor.is_some())
             .finish()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rocksdb::SliceTransform;
+
+    #[test]
+    fn test_cfoptions_clone_preserves_prefix_length() {
+        let original = CFOptions {
+            compaction_style: DBCompactionStyle::Level,
+            disable_auto_compactions: false,
+            level0_file_num_compaction_trigger: 4,
+            write_buffer_size: None,
+            prefix_extractor: Some(SliceTransform::create_fixed_prefix(4)),
+            prefix_length: 4,
+        };
+
+        let cloned = original.clone();
+
+        assert_eq!(cloned.prefix_length, 4);
+        assert!(cloned.prefix_extractor.is_some());
+        assert_eq!(cloned.compaction_style, original.compaction_style);
+        assert_eq!(
+            cloned.disable_auto_compactions,
+            original.disable_auto_compactions
+        );
+        assert_eq!(
+            cloned.level0_file_num_compaction_trigger,
+            original.level0_file_num_compaction_trigger
+        );
+        assert_eq!(cloned.write_buffer_size, original.write_buffer_size);
+    }
+
+    #[test]
+    fn test_cfoptions_clone_preserves_different_prefix_lengths() {
+        for prefix_len in [1, 4, 8, 16, 32] {
+            let original = CFOptions {
+                compaction_style: DBCompactionStyle::Level,
+                disable_auto_compactions: false,
+                level0_file_num_compaction_trigger: 4,
+                write_buffer_size: None,
+                prefix_extractor: Some(SliceTransform::create_fixed_prefix(prefix_len)),
+                prefix_length: prefix_len,
+            };
+
+            let cloned = original.clone();
+            assert_eq!(
+                cloned.prefix_length, prefix_len,
+                "Clone should preserve prefix_length={}",
+                prefix_len
+            );
+        }
+    }
+
+    #[test]
+    fn test_cfoptions_clone_no_prefix() {
+        let original = CFOptions {
+            compaction_style: DBCompactionStyle::Level,
+            disable_auto_compactions: false,
+            level0_file_num_compaction_trigger: 4,
+            write_buffer_size: None,
+            prefix_extractor: None,
+            prefix_length: 0,
+        };
+
+        let cloned = original.clone();
+
+        assert_eq!(cloned.prefix_length, 0);
+        assert!(cloned.prefix_extractor.is_none());
     }
 }

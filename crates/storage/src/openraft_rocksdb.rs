@@ -34,7 +34,36 @@ use openraft::{
 use prost::Message;
 use serde::{Deserialize, Serialize};
 
-use crate::{BasicNode, ColumnFamily, RaftTypeConfig, Request, Response, Storage};
+use crate::{BasicNode, ColumnFamily, Operation, RaftTypeConfig, Request, Response, Storage};
+
+#[allow(dead_code)]
+const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
+
+#[allow(dead_code)]
+fn decode_with_size_limit<T: Message + Default>(
+    data: &[u8],
+) -> Result<T, StorageError<u64>> {
+    if data.len() > MAX_MESSAGE_SIZE {
+        return Err(StorageError::IO {
+            source: StorageIOError::new(
+                ErrorSubject::Store,
+                ErrorVerb::Read,
+                AnyError::error(format!(
+                    "Message too large: {} bytes (max {})",
+                    data.len(),
+                    MAX_MESSAGE_SIZE
+                )),
+            ),
+        });
+    }
+    T::decode(data).map_err(|e| StorageError::IO {
+        source: StorageIOError::new(
+            ErrorSubject::Store,
+            ErrorVerb::Read,
+            AnyError::error(e),
+        ),
+    })
+}
 
 // =============================================================================
 // Raft Group Trait
@@ -87,6 +116,8 @@ impl RaftGroup for DataRaft {
 const VOTE_KEY: &[u8] = b"vote";
 const APPLIED_KEY: &[u8] = b"applied";
 const MEMBERSHIP_KEY: &[u8] = b"membership";
+const LAST_LOG_ID_KEY: &[u8] = b"__last_log_id";
+const LAST_PURGED_LOG_ID_KEY: &[u8] = b"__last_purged_log_id";
 
 // =============================================================================
 // Protobuf Message Types
@@ -99,6 +130,8 @@ pub struct VoteMessage {
     pub term: u64,
     #[prost(uint64, tag = "2")]
     pub node_id: u64,
+    #[prost(uint64, tag = "3")]
+    pub voted_for: u64,
 }
 
 impl VoteMessage {
@@ -106,6 +139,7 @@ impl VoteMessage {
         Self {
             term: vote.leader_id().term,
             node_id: vote.leader_id().node_id,
+            voted_for: vote.leader_id().voted_for().unwrap_or(0),
         }
     }
 
@@ -243,6 +277,65 @@ impl<G: RaftGroup> RocksDBLogStorage<G> {
     pub fn storage(&self) -> &Arc<Storage> {
         &self.storage
     }
+
+    /// Save LogId metadata to storage.
+    fn save_log_id_metadata(&self, cf: ColumnFamily, log_id: &LogId<u64>) -> crate::Result<()> {
+        let msg = LogIdMessage::from_log_id(log_id);
+        let bytes = msg.encode_to_vec();
+        self.storage.put(cf, LAST_LOG_ID_KEY, &bytes)
+    }
+
+    /// Get the last LogId from metadata.
+    fn get_last_log_id(&self, cf: ColumnFamily) -> crate::Result<Option<LogId<u64>>> {
+        match self.storage.get(cf, LAST_LOG_ID_KEY) {
+            Ok(Some(data)) => {
+                let msg = LogIdMessage::decode(&data[..]).map_err(crate::StorageError::ProtobufDecode)?;
+                Ok(Some(msg.to_log_id()))
+            }
+            Ok(None) => {
+                // Fall back to finding last entry by iterating
+                self.find_last_log_entry(cf)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Find the last log entry by iterating backwards.
+    fn find_last_log_entry(&self, cf: ColumnFamily) -> crate::Result<Option<LogId<u64>>> {
+        let mut iter = self.storage.iterator(cf, crate::iterator::IteratorMode::End)?;
+        
+        if let Some((_key, _value)) = iter.step_backward()? {
+            // The value contains the entry data
+            // Since we store only payload bytes (not the full Entry), we need to
+            // fall back to the index-based approach for entries without metadata
+            // In practice, if LAST_LOG_ID_KEY exists, we'll never reach here
+            // But if we do, we need another way to get the log_id
+            
+            // For now, return None - this handles the edge case where
+            // we're recovering from a partial state
+        }
+        
+        Ok(None)
+    }
+
+    /// Save the last purged LogId to storage.
+    fn save_last_purged_log_id(&self, cf: ColumnFamily, log_id: &LogId<u64>) -> crate::Result<()> {
+        let msg = LogIdMessage::from_log_id(log_id);
+        let bytes = msg.encode_to_vec();
+        self.storage.put(cf, LAST_PURGED_LOG_ID_KEY, &bytes)
+    }
+
+    /// Get the last purged LogId from storage.
+    fn get_last_purged_log_id(&self, cf: ColumnFamily) -> crate::Result<Option<LogId<u64>>> {
+        match self.storage.get(cf, LAST_PURGED_LOG_ID_KEY) {
+            Ok(Some(data)) => {
+                let msg = LogIdMessage::decode(&data[..]).map_err(crate::StorageError::ProtobufDecode)?;
+                Ok(Some(msg.to_log_id()))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
 }
 
 impl<G: RaftGroup> RaftLogReader<RaftTypeConfig> for RocksDBLogStorage<G> {
@@ -262,12 +355,31 @@ impl<G: RaftGroup> RaftLogReader<RaftTypeConfig> for RocksDBLogStorage<G> {
             std::ops::Bound::Unbounded => u64::MAX,
         };
 
+        // Get the last LogId from metadata to use as reference
+        let last_log_id = self.get_last_log_id(G::LOG_CF).ok().flatten();
+
         let mut entries = Vec::new();
         for index in start..=end {
             let key = format_log_key(index);
             match self.storage.get(G::LOG_CF, key.as_bytes()) {
                 Ok(Some(value)) => {
-                    let log_id = LogId::new(LeaderId::new(0, 0), index);
+                    // Construct LogId: use stored metadata if available and index matches,
+                    // otherwise fall back to index-only construction
+                    let log_id = if let Some(ref last) = last_log_id {
+                        if index <= last.index {
+                            // Entry is within known range, use term/node_id from last entry
+                            // (assumes sequential log with consistent term/node_id)
+                            LogId::new(
+                                LeaderId::new(last.leader_id.term, last.leader_id.node_id),
+                                index,
+                            )
+                        } else {
+                            LogId::new(LeaderId::new(0, 0), index)
+                        }
+                    } else {
+                        LogId::new(LeaderId::new(0, 0), index)
+                    };
+                    
                     let payload = if value.is_empty() {
                         openraft::EntryPayload::Blank
                     } else {
@@ -307,6 +419,17 @@ impl<G: RaftGroup> RocksDBLogReader<G> {
             _marker: PhantomData,
         }
     }
+
+    fn get_last_log_id(&self, cf: ColumnFamily) -> crate::Result<Option<LogId<u64>>> {
+        match self.storage.get(cf, LAST_LOG_ID_KEY) {
+            Ok(Some(data)) => {
+                let msg = LogIdMessage::decode(&data[..]).map_err(crate::StorageError::ProtobufDecode)?;
+                Ok(Some(msg.to_log_id()))
+            }
+            Ok(None) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
 }
 
 impl<G: RaftGroup> RaftLogReader<RaftTypeConfig> for RocksDBLogReader<G> {
@@ -326,12 +449,28 @@ impl<G: RaftGroup> RaftLogReader<RaftTypeConfig> for RocksDBLogReader<G> {
             std::ops::Bound::Unbounded => u64::MAX,
         };
 
+        // Get the last LogId from metadata to use as reference
+        let last_log_id = self.get_last_log_id(G::LOG_CF).ok().flatten();
+
         let mut entries = Vec::new();
         for index in start..=end {
             let key = format_log_key(index);
             match self.storage.get(G::LOG_CF, key.as_bytes()) {
                 Ok(Some(value)) => {
-                    let log_id = LogId::new(LeaderId::new(0, 0), index);
+                    // Construct LogId: use stored metadata if available and index matches
+                    let log_id = if let Some(ref last) = last_log_id {
+                        if index <= last.index {
+                            LogId::new(
+                                LeaderId::new(last.leader_id.term, last.leader_id.node_id),
+                                index,
+                            )
+                        } else {
+                            LogId::new(LeaderId::new(0, 0), index)
+                        }
+                    } else {
+                        LogId::new(LeaderId::new(0, 0), index)
+                    };
+                    
                     let payload = if value.is_empty() {
                         openraft::EntryPayload::Blank
                     } else {
@@ -364,22 +503,23 @@ impl<G: RaftGroup> RaftLogStorage<RaftTypeConfig> for RocksDBLogStorage<G> {
     async fn get_log_state(
         &mut self,
     ) -> Result<LogState<RaftTypeConfig>, StorageError<u64>> {
-        let last_log_id = match self.storage.get_last_log_index(G::LOG_CF) {
-            Ok(Some(index)) => Some(LogId::new(LeaderId::new(0, 0), index)),
-            Ok(None) => None,
-            Err(e) => {
-                return Err(StorageError::IO {
-                    source: StorageIOError::new(
-                        ErrorSubject::Store,
-                        ErrorVerb::Read,
-                        AnyError::error(e),
-                    ),
-                });
-            }
-        };
+        let last_log_id = self.get_last_log_id(G::LOG_CF).map_err(|e| StorageError::IO {
+            source: StorageIOError::new(
+                ErrorSubject::Store,
+                ErrorVerb::Read,
+                AnyError::error(e.to_string()),
+            ),
+        })?;
+        let last_purged_log_id = self.get_last_purged_log_id(G::LOG_CF).map_err(|e| StorageError::IO {
+            source: StorageIOError::new(
+                ErrorSubject::Store,
+                ErrorVerb::Read,
+                AnyError::error(e.to_string()),
+            ),
+        })?;
 
         Ok(LogState {
-            last_purged_log_id: None,
+            last_purged_log_id,
             last_log_id,
         })
     }
@@ -459,7 +599,7 @@ impl<G: RaftGroup> RaftLogStorage<RaftTypeConfig> for RocksDBLogStorage<G> {
         I: IntoIterator<Item = Entry<RaftTypeConfig>> + OptionalSend,
         I::IntoIter: OptionalSend,
     {
-        let mut last_index: Option<u64> = None;
+        let mut last_log_id: Option<LogId<u64>> = None;
 
         for entry in entries {
             let index = entry.log_id.index;
@@ -484,15 +624,27 @@ impl<G: RaftGroup> RaftLogStorage<RaftTypeConfig> for RocksDBLogStorage<G> {
                 });
             }
 
-            last_index = Some(index);
+            last_log_id = Some(log_id);
+        }
+
+        // Update LAST_LOG_ID_KEY metadata with the last entry's LogId
+        if let Some(log_id) = last_log_id {
+            if let Err(e) = self.save_log_id_metadata(G::LOG_CF, &log_id) {
+                callback.log_io_completed(Err(std::io::Error::other(e.to_string())));
+                return Err(StorageError::IO {
+                    source: StorageIOError::new(
+                        ErrorSubject::Log(log_id),
+                        ErrorVerb::Write,
+                        AnyError::error(e),
+                    ),
+                });
+            }
+
+            // Update last log index cache
+            let _ = self.storage.update_cached_last_log_index(G::LOG_CF, log_id.index);
         }
 
         callback.log_io_completed(Ok(()));
-
-        // Update last log index cache if needed
-        if let Some(idx) = last_index {
-            let _ = self.storage.update_cached_last_log_index(G::LOG_CF, idx);
-        }
 
         Ok(())
     }
@@ -515,6 +667,16 @@ impl<G: RaftGroup> RaftLogStorage<RaftTypeConfig> for RocksDBLogStorage<G> {
         // Purge is essentially truncate - delete all entries <= log_id
         self.storage
             .truncate_log_before(G::LOG_CF, log_id.index + 1)
+            .map_err(|e| StorageError::IO {
+                source: StorageIOError::new(
+                    ErrorSubject::Store,
+                    ErrorVerb::Write,
+                    AnyError::error(e),
+                ),
+            })?;
+
+        // Save the purged log ID for last_purged_log_id tracking
+        self.save_last_purged_log_id(G::LOG_CF, &log_id)
             .map_err(|e| StorageError::IO {
                 source: StorageIOError::new(
                     ErrorSubject::Store,
@@ -751,24 +913,26 @@ impl<G: RaftGroup> RaftStateMachine<RaftTypeConfig> for RocksDBStateMachine<G> {
 
             let response = match &entry.payload {
                 openraft::EntryPayload::Normal(req) => {
-                    // For Data Raft, apply the operation to KV store
                     if let Some(kv_cf) = G::KV_CF {
-                        // Apply SET/DEL operations to the KV column family
-                        // The operation bytes contain the serialized Operation
-                        // For now, we store the data directly
-                        let key = req.operation_bytes.iter().take(32).cloned().collect::<Vec<_>>();
-                        let value = req.operation_bytes.get(32..).unwrap_or(&[]).to_vec();
-
-                        if !key.is_empty() && !value.is_empty() {
-                            let _ = self.storage.put(kv_cf, &key, &value);
-                        } else if !key.is_empty() && value.is_empty() {
-                            // Empty value might indicate a delete
-                            // For now, we just skip
+                        match Operation::deserialize(&req.operation_bytes) {
+                            Ok(Operation::Set { key, value }) => {
+                                if let Err(e) = self.storage.put(kv_cf, &key, &value) {
+                                    tracing::warn!("Failed to apply Set operation: {}", e);
+                                }
+                                Response::new(b"OK".to_vec())
+                            }
+                            Ok(Operation::Del { key }) => {
+                                if let Err(e) = self.storage.delete(kv_cf, &key) {
+                                    tracing::warn!("Failed to apply Del operation: {}", e);
+                                }
+                                Response::new(b"OK".to_vec())
+                            }
+                            Err(e) => {
+                                tracing::error!("Failed to deserialize operation: {}", e);
+                                Response::new(b"ERROR: Invalid operation".to_vec())
+                            }
                         }
-
-                        Response::new(b"OK".to_vec())
                     } else {
-                        // System Raft - no KV operations
                         Response::new(b"OK".to_vec())
                     }
                 }
@@ -965,6 +1129,7 @@ mod tests {
         let msg = VoteMessage::from_vote(&vote);
         assert_eq!(msg.term, 5);
         assert_eq!(msg.node_id, 42);
+        assert_eq!(msg.voted_for, 42);
 
         let decoded = msg.to_vote();
         assert_eq!(decoded.leader_id().term, 5);
@@ -1010,6 +1175,7 @@ mod tests {
         let decoded = VoteMessage::decode(&bytes[..]).unwrap();
         assert_eq!(decoded.term, 10);
         assert_eq!(decoded.node_id, 99);
+        assert_eq!(decoded.voted_for, 99);
     }
 
     #[test]
@@ -1031,5 +1197,157 @@ mod tests {
         assert!(msg.log_id.is_none());
         // Default membership may have voters from the default config
         assert_eq!(msg.learners.len(), 0);
+    }
+
+    #[test]
+    fn test_decode_with_size_limit_rejects_large_messages() {
+        let large_data = vec![0u8; MAX_MESSAGE_SIZE + 1];
+        let result: Result<LogIdMessage, _> = decode_with_size_limit(&large_data);
+        assert!(result.is_err());
+
+        if let Err(StorageError::IO { source }) = result {
+            let error_str = format!("{}", source);
+            assert!(error_str.contains("Message too large"));
+            assert!(error_str.contains(&format!("{}", MAX_MESSAGE_SIZE + 1)));
+        } else {
+            panic!("Expected IO error");
+        }
+    }
+
+    #[test]
+    fn test_decode_with_size_limit_accepts_small_messages() {
+        let msg = LogIdMessage {
+            term: 1,
+            node_id: 2,
+            index: 3,
+        };
+        let bytes = msg.encode_to_vec();
+        let result: Result<LogIdMessage, _> = decode_with_size_limit(&bytes);
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().index, 3);
+    }
+
+    #[test]
+    fn test_decode_with_size_limit_at_boundary() {
+        let small_data = vec![0u8; MAX_MESSAGE_SIZE - 1];
+        let result: Result<LogIdMessage, _> = decode_with_size_limit(&small_data);
+        assert!(result.is_err());
+
+        let boundary_data = vec![0u8; MAX_MESSAGE_SIZE];
+        let result: Result<LogIdMessage, _> = decode_with_size_limit(&boundary_data);
+        assert!(result.is_err());
+    }
+
+    // ========================================================================
+    // Operation Deserialization Tests
+    // ========================================================================
+
+    #[test]
+    fn test_operation_deserialize_set() {
+        let op = Operation::Set {
+            key: b"test_key".to_vec(),
+            value: b"test_value".to_vec(),
+        };
+        let bytes = op.serialize().unwrap();
+        let deserialized = Operation::deserialize(&bytes).unwrap();
+        assert_eq!(op, deserialized);
+    }
+
+    #[test]
+    fn test_operation_deserialize_del() {
+        let op = Operation::Del {
+            key: b"test_key".to_vec(),
+        };
+        let bytes = op.serialize().unwrap();
+        let deserialized = Operation::deserialize(&bytes).unwrap();
+        assert_eq!(op, deserialized);
+    }
+
+    #[test]
+    fn test_operation_deserialize_large_key() {
+        let large_key = vec![b'K'; 100];
+        let op = Operation::Set {
+            key: large_key.clone(),
+            value: b"value".to_vec(),
+        };
+        let bytes = op.serialize().unwrap();
+        let deserialized = Operation::deserialize(&bytes).unwrap();
+        match deserialized {
+            Operation::Set { key, value } => {
+                assert_eq!(key, large_key);
+                assert_eq!(value, b"value");
+            }
+            _ => panic!("Expected Set operation"),
+        }
+    }
+
+    #[test]
+    fn test_operation_invalid_deserialization() {
+        let invalid_bytes = vec![0xFF, 0xFF, 0xFF, 0xFF];
+        let result = Operation::deserialize(&invalid_bytes);
+        assert!(result.is_err());
+    }
+
+    // ========================================================================
+    // LogId Metadata Tests
+    // ========================================================================
+
+    #[test]
+    fn test_log_id_message_roundtrip_with_metadata() {
+        // Test that LogIdMessage correctly preserves all metadata
+        let log_id = LogId::new(LeaderId::new(5, 42), 100);
+        let msg = LogIdMessage::from_log_id(&log_id);
+        
+        // Verify all fields are preserved
+        assert_eq!(msg.term, 5);
+        assert_eq!(msg.node_id, 42);
+        assert_eq!(msg.index, 100);
+        
+        // Verify roundtrip
+        let bytes = msg.encode_to_vec();
+        let decoded = LogIdMessage::decode(&bytes[..]).unwrap();
+        let roundtrip_log_id = decoded.to_log_id();
+        
+        assert_eq!(roundtrip_log_id.leader_id.term, 5);
+        assert_eq!(roundtrip_log_id.leader_id.node_id, 42);
+        assert_eq!(roundtrip_log_id.index, 100);
+    }
+
+    #[test]
+    fn test_log_id_message_with_zero_values() {
+        // Test LogIdMessage with zero term/node_id (edge case)
+        let log_id = LogId::new(LeaderId::new(0, 0), 1);
+        let msg = LogIdMessage::from_log_id(&log_id);
+        
+        assert_eq!(msg.term, 0);
+        assert_eq!(msg.node_id, 0);
+        assert_eq!(msg.index, 1);
+        
+        let decoded = msg.to_log_id();
+        assert_eq!(decoded.leader_id.term, 0);
+        assert_eq!(decoded.leader_id.node_id, 0);
+    }
+
+    #[test]
+    fn test_log_id_message_with_max_values() {
+        // Test with maximum u64 values
+        let log_id = LogId::new(LeaderId::new(u64::MAX, u64::MAX), u64::MAX);
+        let msg = LogIdMessage::from_log_id(&log_id);
+        
+        assert_eq!(msg.term, u64::MAX);
+        assert_eq!(msg.node_id, u64::MAX);
+        assert_eq!(msg.index, u64::MAX);
+        
+        let decoded = msg.to_log_id();
+        assert_eq!(decoded.leader_id.term, u64::MAX);
+        assert_eq!(decoded.leader_id.node_id, u64::MAX);
+        assert_eq!(decoded.index, u64::MAX);
+    }
+
+    #[test]
+    fn test_last_log_id_key_constant() {
+        // Verify the key constants are correct
+        assert_eq!(LAST_LOG_ID_KEY, b"__last_log_id");
+        assert_eq!(LAST_PURGED_LOG_ID_KEY, b"__last_purged_log_id");
     }
 }

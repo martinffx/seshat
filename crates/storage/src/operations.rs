@@ -8,6 +8,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use thiserror::Error;
 
+const MAX_OPERATION_SIZE: u64 = 16 * 1024 * 1024;
+
 /// Errors that can occur during operation processing
 #[derive(Error, Debug)]
 pub enum OperationError {
@@ -127,6 +129,11 @@ impl Operation {
     /// assert_eq!(op, deserialized);
     /// ```
     pub fn deserialize(bytes: &[u8]) -> OperationResult<Operation> {
+        if bytes.len() as u64 > MAX_OPERATION_SIZE {
+            return Err(OperationError::SerializationError(Box::new(
+                bincode::ErrorKind::Custom("Operation exceeds maximum size limit".to_string()),
+            )));
+        }
         bincode::deserialize(bytes).map_err(OperationError::SerializationError)
     }
 }
@@ -420,6 +427,21 @@ mod tests {
     fn test_deserialize_wrong_variant() {
         let invalid_bytes = vec![0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
         let result = Operation::deserialize(&invalid_bytes);
+
+        assert!(result.is_err());
+    }
+
+    /// Test 20b: Deserialize operation exceeding size limit is rejected
+    #[test]
+    fn test_deserialize_rejects_oversized_operation() {
+        let large_value = vec![b'X'; 20 * 1024 * 1024];
+        let op = Operation::Set {
+            key: b"key".to_vec(),
+            value: large_value,
+        };
+
+        let bytes = op.serialize().expect("Serialization should succeed");
+        let result = Operation::deserialize(&bytes);
 
         assert!(result.is_err());
     }

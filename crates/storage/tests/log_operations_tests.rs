@@ -1039,3 +1039,65 @@ fn test_cache_survives_truncation() {
         .unwrap();
     assert_eq!(cached, None);
 }
+
+// ============================================================================
+// get_log_range Tests
+// ============================================================================
+
+#[test]
+fn test_get_log_range_basic() {
+    let (storage, _temp_dir) = create_test_storage();
+
+    // Append 5 entries
+    append_sequential_entries(&storage, ColumnFamily::SystemRaftLog, 5).unwrap();
+
+    // Get range that exists
+    let entries = storage
+        .get_log_range(ColumnFamily::SystemRaftLog, 1, 6)
+        .unwrap();
+    assert_eq!(entries.len(), 5);
+
+    // Verify content
+    assert_eq!(entries[0], b"entry_1");
+    assert_eq!(entries[4], b"entry_5");
+}
+
+#[test]
+fn test_get_log_range_partial() {
+    let (storage, _temp_dir) = create_test_storage();
+
+    append_sequential_entries(&storage, ColumnFamily::SystemRaftLog, 10).unwrap();
+
+    // Get partial range
+    let entries = storage
+        .get_log_range(ColumnFamily::SystemRaftLog, 3, 7)
+        .unwrap();
+    assert_eq!(entries.len(), 4);
+    assert_eq!(entries[0], b"entry_3");
+    assert_eq!(entries[3], b"entry_6");
+}
+
+#[test]
+fn test_get_log_range_empty() {
+    let (storage, _temp_dir) = create_test_storage();
+
+    // No entries
+    let entries = storage
+        .get_log_range(ColumnFamily::SystemRaftLog, 1, 10)
+        .unwrap();
+    assert!(entries.is_empty());
+}
+
+#[test]
+fn test_get_log_range_rejects_non_log_cf() {
+    let (storage, _temp_dir) = create_test_storage();
+
+    let result = storage.get_log_range(ColumnFamily::DataKv, 1, 10);
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        StorageError::InvalidColumnFamily { reason, .. } => {
+            assert!(reason.contains("get_log_range only works on log CFs"));
+        }
+        e => panic!("Expected InvalidColumnFamily, got: {:?}", e),
+    }
+}

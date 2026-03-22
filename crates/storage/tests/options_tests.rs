@@ -360,6 +360,7 @@ fn test_cf_options_struct_construction() {
         level0_file_num_compaction_trigger: 5,
         write_buffer_size: Some(16 * 1024 * 1024),
         prefix_extractor: None,
+        prefix_length: 0,
     };
 
     assert_eq!(opts.compaction_style, DBCompactionStyle::Universal);
@@ -367,6 +368,7 @@ fn test_cf_options_struct_construction() {
     assert_eq!(opts.level0_file_num_compaction_trigger, 5);
     assert_eq!(opts.write_buffer_size, Some(16 * 1024 * 1024));
     assert!(opts.prefix_extractor.is_none());
+    assert_eq!(opts.prefix_length, 0);
 }
 
 #[test]
@@ -383,6 +385,7 @@ fn test_storage_options_manual_construction() {
             level0_file_num_compaction_trigger: 4,
             write_buffer_size: None,
             prefix_extractor: None,
+            prefix_length: 0,
         },
     );
 

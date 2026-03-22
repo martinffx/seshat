@@ -31,6 +31,9 @@ anyhow = { workspace = true }
 # Async traits
 async-trait = "0.1"
 
+# Tracing for logging
+tracing = "0.1"
+
 # Storage backend - RocksDB
 rocksdb = { version = "0.22", default-features = false, features = ["multi-threaded-cf"] }
 

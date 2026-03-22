@@ -12,7 +12,7 @@ use rocksdb::{
     WriteBatch as RocksDBWriteBatch, WriteOptions, DB,
 };
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// Main storage struct that wraps RocksDB.
@@ -43,6 +43,9 @@ pub struct Storage {
 
     /// Cache of last log index per log CF (for performance)
     last_log_index_cache: Arc<RwLock<HashMap<ColumnFamily, u64>>>,
+
+    /// Path to the data directory (used for snapshot path validation)
+    path: PathBuf,
 }
 
 impl Storage {
@@ -161,9 +164,10 @@ impl Storage {
         let mut storage = Self {
             db,
             last_log_index_cache,
+            path: options.data_dir.clone(),
         };
 
-        // Step 8: Warm up cache
+        // Step 7: Warm up cache
         storage.warm_up_index_cache()?;
 
         Ok(storage)
@@ -653,7 +657,6 @@ impl Storage {
     /// # Ok::<(), seshat_storage::StorageError>(())
     /// ```
     pub fn get_log_range(&self, cf: ColumnFamily, start: u64, end: u64) -> Result<Vec<Vec<u8>>> {
-        // Step 1: Validate CF is a log CF
         if !cf.is_log_cf() {
             return Err(StorageError::InvalidColumnFamily {
                 cf: cf.as_str().to_string(),
@@ -662,15 +665,44 @@ impl Storage {
             });
         }
 
-        // Step 2: Iterate through range and collect existing entries
         let mut entries = Vec::new();
+        let start_key = format_log_key(start);
+        let mut iter = self.iterator(
+            cf,
+            IteratorMode::From(start_key.into_bytes(), Direction::Forward),
+        )?;
 
-        for index in start..end {
-            let key = format_log_key(index);
-            if let Some(value) = self.get(cf, key.as_bytes())? {
-                entries.push(value);
+        while iter.valid() {
+            let key = match iter.key() {
+                Some(k) => k,
+                None => break,
+            };
+
+            if key.len() < 24 || &key[..4] != b"log:" {
+                break;
             }
-            // Skip missing indices (not an error)
+
+            let index_str =
+                std::str::from_utf8(&key[4..24]).map_err(|_| StorageError::CorruptedData {
+                    cf: cf.as_str().to_string(),
+                    key: key.to_vec(),
+                    reason: "Invalid log key format".to_string(),
+                })?;
+            let index: u64 = index_str.parse().map_err(|_| StorageError::CorruptedData {
+                cf: cf.as_str().to_string(),
+                key: key.to_vec(),
+                reason: "Invalid log index".to_string(),
+            })?;
+
+            if index >= end {
+                break;
+            }
+
+            if let Some(value) = iter.value() {
+                entries.push(value.to_vec());
+            }
+
+            iter.step_forward()?;
         }
 
         Ok(entries)
@@ -1050,6 +1082,63 @@ impl Storage {
     /// The Raft crate is responsible for managing snapshot lifecycle
     /// (e.g., deleting old snapshots).
     pub fn create_snapshot(&self, path: &Path) -> Result<()> {
+        // Step 0: Validate path is within data directory (security: prevent path traversal)
+        let data_dir = self
+            .path
+            .canonicalize()
+            .map_err(|e| StorageError::SnapshotFailed {
+                path: self.path.display().to_string(),
+                reason: format!("Cannot resolve data directory: {}", e),
+            })?;
+
+        // For the target path, we need to resolve it relative to its parent directory
+        // since canonicalize() requires the path to exist
+        let canonical_path = if path.exists() {
+            path.canonicalize()
+                .map_err(|e| StorageError::SnapshotFailed {
+                    path: path.display().to_string(),
+                    reason: format!("Cannot resolve path: {}", e),
+                })?
+        } else {
+            // Path doesn't exist - try canonicalizing the full path
+            // This handles paths with ".." that resolve to existing directories
+            match path.canonicalize() {
+                Ok(canonical) => canonical,
+                Err(_) => {
+                    // Fallback: resolve ".." components manually
+                    let parent = path.parent().ok_or_else(|| StorageError::SnapshotFailed {
+                        path: path.display().to_string(),
+                        reason: "Path has no parent directory".to_string(),
+                    })?;
+
+                    // Try to canonicalize parent (handles ".." components)
+                    let canonical_parent =
+                        parent
+                            .canonicalize()
+                            .map_err(|e| StorageError::SnapshotFailed {
+                                path: path.display().to_string(),
+                                reason: format!("Cannot resolve parent directory: {}", e),
+                            })?;
+
+                    let filename =
+                        path.file_name()
+                            .ok_or_else(|| StorageError::SnapshotFailed {
+                                path: path.display().to_string(),
+                                reason: "Path has no filename component".to_string(),
+                            })?;
+
+                    canonical_parent.join(filename)
+                }
+            }
+        };
+
+        if !canonical_path.starts_with(&data_dir) {
+            return Err(StorageError::SnapshotFailed {
+                path: path.display().to_string(),
+                reason: "Snapshot path must be within data directory".to_string(),
+            });
+        }
+
         // Step 1: Create Checkpoint from DB
         let checkpoint = Checkpoint::new(&self.db)?;
 
@@ -1092,6 +1181,7 @@ fn format_log_key(index: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn test_format_log_key_zero_pads_correctly() {
@@ -1100,5 +1190,57 @@ mod tests {
         assert_eq!(format_log_key(42), "log:00000000000000000042");
         assert_eq!(format_log_key(100), "log:00000000000000000100");
         assert_eq!(format_log_key(u64::MAX), format!("log:{:020}", u64::MAX));
+    }
+
+    #[test]
+    fn test_create_snapshot_rejects_path_traversal() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let data_dir = temp_dir.path().join("data");
+        std::fs::create_dir_all(&data_dir).unwrap();
+
+        let options = StorageOptions::with_data_dir(data_dir.clone());
+        let storage = Storage::new(options).unwrap();
+
+        // Attempt path traversal: try to escape to parent directory
+        // We use a path that starts outside the data directory
+        let malicious_path = temp_dir.path().join("../outside_snapshot");
+        let result = storage.create_snapshot(&malicious_path);
+
+        // Should be rejected with SnapshotFailed error
+        assert!(result.is_err());
+        match result {
+            Err(StorageError::SnapshotFailed { path: _, reason }) => {
+                // The error should indicate the path is outside the data directory
+                // or that the path couldn't be resolved (which is also a rejection)
+                assert!(
+                    reason.contains("must be within data directory")
+                        || reason.contains("Cannot resolve")
+                );
+            }
+            _ => panic!("Expected SnapshotFailed error, got {:?}", result),
+        }
+    }
+
+    #[test]
+    fn test_create_snapshot_rejects_absolute_path_outside_data_dir() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let data_dir = temp_dir.path().join("data");
+        std::fs::create_dir_all(&data_dir).unwrap();
+
+        let options = StorageOptions::with_data_dir(data_dir);
+        let storage = Storage::new(options).unwrap();
+
+        // Attempt to write to completely different directory
+        let outside_path = Path::new("/tmp/seshat_snapshot_outside");
+        let result = storage.create_snapshot(outside_path);
+
+        // Should be rejected
+        assert!(result.is_err());
+        match result {
+            Err(StorageError::SnapshotFailed { reason, .. }) => {
+                assert!(reason.contains("must be within data directory"));
+            }
+            _ => panic!("Expected SnapshotFailed error, got {:?}", result),
+        }
     }
 }

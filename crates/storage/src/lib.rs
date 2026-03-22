@@ -22,6 +22,7 @@ pub mod error;
 pub mod iterator;
 pub mod options;
 pub mod storage;
+pub mod storage_trait;
 
 // Re-export commonly used types
 pub use openraft_mem::{
@@ -42,6 +43,7 @@ pub use error::{Result, StorageError};
 pub use iterator::{Direction, IteratorMode, StorageIterator};
 pub use options::{CFOptions, StorageOptions};
 pub use storage::Storage;
+pub use storage_trait::StorageBackend;
 
 // ============================================================================
 // Legacy raft-rs storage (will be removed after OpenRaft migration)
