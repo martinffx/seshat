@@ -1,7 +1,7 @@
 //! Tests for StorageOptions and CFOptions configuration structures.
 
 use rocksdb::DBCompactionStyle;
-use seshat_storage::{CFOptions, ColumnFamily, StorageOptions, StorageError};
+use seshat_storage::{CFOptions, ColumnFamily, StorageError, StorageOptions};
 use std::path::PathBuf;
 
 // ============================================================================
@@ -14,13 +14,13 @@ fn test_default_storage_options() {
 
     // Verify default values per design.md lines 201-214
     assert_eq!(opts.data_dir, PathBuf::from("./data/rocksdb"));
-    assert_eq!(opts.create_if_missing, true);
+    assert!(opts.create_if_missing);
     assert_eq!(opts.compression, rocksdb::DBCompressionType::Lz4);
     assert_eq!(opts.write_buffer_size_mb, 64);
     assert_eq!(opts.max_write_buffer_number, 3);
     assert_eq!(opts.target_file_size_mb, 64);
     assert_eq!(opts.max_open_files, -1);
-    assert_eq!(opts.enable_statistics, false);
+    assert!(!opts.enable_statistics);
 
     // Verify all 6 column families have defaults
     assert_eq!(opts.cf_options.len(), 6);
@@ -45,13 +45,13 @@ fn test_with_data_dir() {
     assert_eq!(opts.data_dir, custom_path);
 
     // All other fields should have default values
-    assert_eq!(opts.create_if_missing, true);
+    assert!(opts.create_if_missing);
     assert_eq!(opts.compression, rocksdb::DBCompressionType::Lz4);
     assert_eq!(opts.write_buffer_size_mb, 64);
     assert_eq!(opts.max_write_buffer_number, 3);
     assert_eq!(opts.target_file_size_mb, 64);
     assert_eq!(opts.max_open_files, -1);
-    assert_eq!(opts.enable_statistics, false);
+    assert!(!opts.enable_statistics);
     assert_eq!(opts.cf_options.len(), 6);
 }
 
@@ -67,20 +67,24 @@ fn test_validate_accepts_valid_config() {
 
 #[test]
 fn test_validate_accepts_minimum_valid_values() {
-    let mut opts = StorageOptions::default();
-    opts.write_buffer_size_mb = 1;
-    opts.max_write_buffer_number = 2;
-    opts.target_file_size_mb = 1;
+    let opts = StorageOptions {
+        write_buffer_size_mb: 1,
+        max_write_buffer_number: 2,
+        target_file_size_mb: 1,
+        ..Default::default()
+    };
 
     assert!(opts.validate().is_ok());
 }
 
 #[test]
 fn test_validate_accepts_maximum_valid_values() {
-    let mut opts = StorageOptions::default();
-    opts.write_buffer_size_mb = 1024;
-    opts.max_write_buffer_number = 10;
-    opts.target_file_size_mb = 1024;
+    let opts = StorageOptions {
+        write_buffer_size_mb: 1024,
+        max_write_buffer_number: 10,
+        target_file_size_mb: 1024,
+        ..Default::default()
+    };
 
     assert!(opts.validate().is_ok());
 }
@@ -91,8 +95,10 @@ fn test_validate_accepts_maximum_valid_values() {
 
 #[test]
 fn test_validate_rejects_write_buffer_size_too_small() {
-    let mut opts = StorageOptions::default();
-    opts.write_buffer_size_mb = 0;
+    let opts = StorageOptions {
+        write_buffer_size_mb: 0,
+        ..Default::default()
+    };
 
     let result = opts.validate();
     assert!(result.is_err());
@@ -108,8 +114,10 @@ fn test_validate_rejects_write_buffer_size_too_small() {
 
 #[test]
 fn test_validate_rejects_write_buffer_size_too_large() {
-    let mut opts = StorageOptions::default();
-    opts.write_buffer_size_mb = 1025;
+    let opts = StorageOptions {
+        write_buffer_size_mb: 1025,
+        ..Default::default()
+    };
 
     let result = opts.validate();
     assert!(result.is_err());
@@ -129,8 +137,10 @@ fn test_validate_rejects_write_buffer_size_too_large() {
 
 #[test]
 fn test_validate_rejects_max_write_buffer_number_too_small() {
-    let mut opts = StorageOptions::default();
-    opts.max_write_buffer_number = 1;
+    let opts = StorageOptions {
+        max_write_buffer_number: 1,
+        ..Default::default()
+    };
 
     let result = opts.validate();
     assert!(result.is_err());
@@ -146,8 +156,10 @@ fn test_validate_rejects_max_write_buffer_number_too_small() {
 
 #[test]
 fn test_validate_rejects_max_write_buffer_number_too_large() {
-    let mut opts = StorageOptions::default();
-    opts.max_write_buffer_number = 11;
+    let opts = StorageOptions {
+        max_write_buffer_number: 11,
+        ..Default::default()
+    };
 
     let result = opts.validate();
     assert!(result.is_err());
@@ -167,8 +179,10 @@ fn test_validate_rejects_max_write_buffer_number_too_large() {
 
 #[test]
 fn test_validate_rejects_target_file_size_too_small() {
-    let mut opts = StorageOptions::default();
-    opts.target_file_size_mb = 0;
+    let opts = StorageOptions {
+        target_file_size_mb: 0,
+        ..Default::default()
+    };
 
     let result = opts.validate();
     assert!(result.is_err());
@@ -184,8 +198,10 @@ fn test_validate_rejects_target_file_size_too_small() {
 
 #[test]
 fn test_validate_rejects_target_file_size_too_large() {
-    let mut opts = StorageOptions::default();
-    opts.target_file_size_mb = 1025;
+    let opts = StorageOptions {
+        target_file_size_mb: 1025,
+        ..Default::default()
+    };
 
     let result = opts.validate();
     assert!(result.is_err());
@@ -213,7 +229,7 @@ fn test_default_cf_options_for_system_raft_log() {
 
     // Per design.md lines 265-271
     assert_eq!(cf_opts.compaction_style, DBCompactionStyle::Level);
-    assert_eq!(cf_opts.disable_auto_compactions, false);
+    assert!(!cf_opts.disable_auto_compactions);
     assert_eq!(cf_opts.level0_file_num_compaction_trigger, 2);
     assert_eq!(cf_opts.write_buffer_size, None);
     assert!(cf_opts.prefix_extractor.is_none());
@@ -229,7 +245,7 @@ fn test_default_cf_options_for_data_raft_log() {
 
     // Same as SystemRaftLog per design.md lines 265-271
     assert_eq!(cf_opts.compaction_style, DBCompactionStyle::Level);
-    assert_eq!(cf_opts.disable_auto_compactions, false);
+    assert!(!cf_opts.disable_auto_compactions);
     assert_eq!(cf_opts.level0_file_num_compaction_trigger, 2);
     assert_eq!(cf_opts.write_buffer_size, None);
     assert!(cf_opts.prefix_extractor.is_none());
@@ -249,7 +265,7 @@ fn test_default_cf_options_for_system_raft_state() {
 
     // Per design.md lines 273-279
     assert_eq!(cf_opts.compaction_style, DBCompactionStyle::Level);
-    assert_eq!(cf_opts.disable_auto_compactions, true);
+    assert!(cf_opts.disable_auto_compactions);
     assert_eq!(cf_opts.level0_file_num_compaction_trigger, 10);
     assert_eq!(cf_opts.write_buffer_size, Some(4 * 1024 * 1024)); // 4MB
     assert!(cf_opts.prefix_extractor.is_none());
@@ -265,7 +281,7 @@ fn test_default_cf_options_for_data_raft_state() {
 
     // Same as SystemRaftState per design.md lines 273-279
     assert_eq!(cf_opts.compaction_style, DBCompactionStyle::Level);
-    assert_eq!(cf_opts.disable_auto_compactions, true);
+    assert!(cf_opts.disable_auto_compactions);
     assert_eq!(cf_opts.level0_file_num_compaction_trigger, 10);
     assert_eq!(cf_opts.write_buffer_size, Some(4 * 1024 * 1024)); // 4MB
     assert!(cf_opts.prefix_extractor.is_none());
@@ -285,7 +301,7 @@ fn test_default_cf_options_for_system_data() {
 
     // Per design.md lines 281-287
     assert_eq!(cf_opts.compaction_style, DBCompactionStyle::Level);
-    assert_eq!(cf_opts.disable_auto_compactions, true);
+    assert!(cf_opts.disable_auto_compactions);
     assert_eq!(cf_opts.level0_file_num_compaction_trigger, 10);
     assert_eq!(cf_opts.write_buffer_size, Some(8 * 1024 * 1024)); // 8MB
     assert!(cf_opts.prefix_extractor.is_none());
@@ -305,7 +321,7 @@ fn test_default_cf_options_for_data_kv() {
 
     // Per design.md lines 289-304
     assert_eq!(cf_opts.compaction_style, DBCompactionStyle::Level);
-    assert_eq!(cf_opts.disable_auto_compactions, false);
+    assert!(!cf_opts.disable_auto_compactions);
     assert_eq!(cf_opts.level0_file_num_compaction_trigger, 4);
     assert_eq!(cf_opts.write_buffer_size, None);
 
@@ -332,11 +348,7 @@ fn test_all_cfs_have_default_options() {
     }
 
     // Ensure no extra CFs are configured
-    assert_eq!(
-        opts.cf_options.len(),
-        6,
-        "Should have exactly 6 CF options"
-    );
+    assert_eq!(opts.cf_options.len(), 6, "Should have exactly 6 CF options");
 }
 
 #[test]
@@ -351,7 +363,7 @@ fn test_cf_options_struct_construction() {
     };
 
     assert_eq!(opts.compaction_style, DBCompactionStyle::Universal);
-    assert_eq!(opts.disable_auto_compactions, true);
+    assert!(opts.disable_auto_compactions);
     assert_eq!(opts.level0_file_num_compaction_trigger, 5);
     assert_eq!(opts.write_buffer_size, Some(16 * 1024 * 1024));
     assert!(opts.prefix_extractor.is_none());
@@ -387,11 +399,11 @@ fn test_storage_options_manual_construction() {
     };
 
     assert_eq!(opts.data_dir, PathBuf::from("/tmp/test"));
-    assert_eq!(opts.create_if_missing, false);
+    assert!(!opts.create_if_missing);
     assert_eq!(opts.compression, rocksdb::DBCompressionType::Zstd);
     assert_eq!(opts.write_buffer_size_mb, 128);
     assert_eq!(opts.max_write_buffer_number, 5);
     assert_eq!(opts.target_file_size_mb, 128);
     assert_eq!(opts.max_open_files, 1000);
-    assert_eq!(opts.enable_statistics, true);
+    assert!(opts.enable_statistics);
 }

@@ -7,7 +7,6 @@
 //! - Integration with Storage layer
 
 use seshat_storage::{ColumnFamily, Result, Storage, StorageOptions, WriteBatch};
-use std::path::PathBuf;
 use tempfile::TempDir;
 
 // ============================================================================

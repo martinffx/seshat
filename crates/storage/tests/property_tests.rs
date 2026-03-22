@@ -13,10 +13,10 @@
 
 use proptest::prelude::*;
 use seshat_storage::{
-    ColumnFamily, Storage, StorageOptions, WriteBatch,
     iterator::{Direction, IteratorMode},
+    ColumnFamily, Storage, StorageOptions, WriteBatch,
 };
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use tempfile::TempDir;
 
 // ============================================================================
@@ -41,12 +41,12 @@ fn test_storage_at_path(path: std::path::PathBuf) -> Storage {
 // Strategy Definitions
 // ============================================================================
 
-/// Generate valid log indices (1..=1000).
+#[allow(dead_code)]
 fn log_index_strategy() -> impl Strategy<Value = u64> {
     1u64..=1000
 }
 
-/// Generate sequential log indices [1, 2, 3, ..., count].
+#[allow(dead_code)]
 fn sequential_indices(count: usize) -> impl Strategy<Value = Vec<u64>> {
     Just((1..=count as u64).collect())
 }
@@ -71,7 +71,7 @@ fn small_value_strategy() -> impl Strategy<Value = Vec<u8>> {
     prop::collection::vec(any::<u8>(), 1..100)
 }
 
-/// Generate key-value pairs.
+#[allow(dead_code)]
 fn kv_pair_strategy() -> impl Strategy<Value = (Vec<u8>, Vec<u8>)> {
     (key_strategy(), value_strategy())
 }
@@ -83,14 +83,16 @@ fn small_kv_pair_strategy() -> impl Strategy<Value = (Vec<u8>, Vec<u8>)> {
 
 /// Generate a vector of unique key-value pairs.
 fn unique_kv_pairs(count: usize) -> impl Strategy<Value = Vec<(Vec<u8>, Vec<u8>)>> {
-    prop::collection::vec(small_kv_pair_strategy(), count..=count)
-        .prop_filter("keys must be unique", |pairs| {
+    prop::collection::vec(small_kv_pair_strategy(), count..=count).prop_filter(
+        "keys must be unique",
+        |pairs| {
             let keys: HashSet<_> = pairs.iter().map(|(k, _)| k).collect();
             keys.len() == pairs.len()
-        })
+        },
+    )
 }
 
-/// Generate log entries (index + data).
+#[allow(dead_code)]
 fn log_entry_strategy() -> impl Strategy<Value = (u64, Vec<u8>)> {
     (log_index_strategy(), value_strategy())
 }
@@ -168,36 +170,40 @@ proptest! {
 
     /// Property: Gaps in log indices always fail.
     #[test]
-    fn prop_gap_detection(start_idx in 1u64..=10, gap_size in 1u64..=5) {
+    fn prop_gap_detection(count in 1u64..=20, gap_size in 1u64..=5) {
         let (storage, _dir) = test_storage();
         let cf = ColumnFamily::DataRaftLog;
 
-        // Append first entry
-        storage.append_log_entry(cf, start_idx, b"entry").unwrap();
+        // Append sequential entries 1..count
+        for i in 1..=count {
+            storage.append_log_entry(cf, i, b"entry").unwrap();
+        }
 
-        // Try to append with gap
-        let gap_idx = start_idx + 1 + gap_size;
+        // Try to append with gap after count
+        let gap_idx = count + 1 + gap_size;
         let result = storage.append_log_entry(cf, gap_idx, b"gap_entry");
 
         prop_assert!(result.is_err(), "Gap at index {} should fail", gap_idx);
 
         // Verify last index unchanged
-        prop_assert_eq!(storage.get_last_log_index(cf).unwrap(), Some(start_idx));
+        prop_assert_eq!(storage.get_last_log_index(cf).unwrap(), Some(count));
     }
 
     /// Property: Duplicate indices always fail.
     #[test]
-    fn prop_duplicate_detection(index in 1u64..=100) {
+    fn prop_duplicate_detection(count in 1u64..=50) {
         let (storage, _dir) = test_storage();
         let cf = ColumnFamily::SystemRaftLog;
 
-        // Append first entry
-        storage.append_log_entry(cf, index, b"entry1").unwrap();
+        // Append sequential entries 1..count
+        for i in 1..=count {
+            storage.append_log_entry(cf, i, b"entry").unwrap();
+        }
 
-        // Try to append duplicate
-        let result = storage.append_log_entry(cf, index, b"entry2");
+        // Try to append the last index again (duplicate)
+        let result = storage.append_log_entry(cf, count, b"duplicate");
 
-        prop_assert!(result.is_err(), "Duplicate index {} should fail", index);
+        prop_assert!(result.is_err(), "Duplicate index {} should fail", count);
     }
 
     /// Property: Cached index always equals DB index.
@@ -337,7 +343,7 @@ proptest! {
         let mut iter = storage.iterator(cf, IteratorMode::Start).unwrap();
         let mut seen_keys = HashSet::new();
 
-        while let Some((key, _value)) = iter.next() {
+        while let Some((key, _value)) = iter.step_forward().unwrap() {
             seen_keys.insert(key.to_vec());
         }
 
@@ -363,7 +369,7 @@ proptest! {
         // Iterate and collect keys
         let mut iter = storage.iterator(cf, IteratorMode::Start).unwrap();
         let mut keys = Vec::new();
-        while let Some((key, _)) = iter.next() {
+        while let Some((key, _)) = iter.step_forward().unwrap() {
             keys.push(key.to_vec());
         }
 
@@ -388,14 +394,14 @@ proptest! {
         // Forward iteration
         let mut forward_iter = storage.iterator(cf, IteratorMode::Start).unwrap();
         let mut forward_keys = Vec::new();
-        while let Some((key, _)) = forward_iter.next() {
+        while let Some((key, _)) = forward_iter.step_forward().unwrap() {
             forward_keys.push(key.to_vec());
         }
 
         // Reverse iteration
         let mut reverse_iter = storage.iterator(cf, IteratorMode::End).unwrap();
         let mut reverse_keys = Vec::new();
-        while let Some((key, _)) = reverse_iter.prev() {
+        while let Some((key, _)) = reverse_iter.step_backward().unwrap() {
             reverse_keys.push(key.to_vec());
         }
 
@@ -426,7 +432,7 @@ proptest! {
         match iter_result {
             Ok(mut iter) => {
                 // Iterator should be valid (either found key or next key)
-                if let Some((found_key, _)) = iter.next() {
+                if let Some((found_key, _)) = iter.step_forward().unwrap() {
                     // Found key should be >= seek_key
                     prop_assert!(found_key.as_ref() >= seek_key.as_slice(),
                         "Seek result should be >= seek key");
@@ -495,7 +501,7 @@ proptest! {
         // Iterate CF1
         let mut iter1 = storage.iterator(cf1, IteratorMode::Start).unwrap();
         let mut cf1_values = Vec::new();
-        while let Some((_, value)) = iter1.next() {
+        while let Some((_, value)) = iter1.step_forward().unwrap() {
             cf1_values.push(value.to_vec());
         }
 

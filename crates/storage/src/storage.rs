@@ -3,13 +3,17 @@
 //! This module provides the core `Storage` struct that wraps RocksDB and provides
 //! the main API for persistent storage operations.
 
-use crate::{ColumnFamily, Result, StorageError, StorageOptions, WriteBatch};
 use crate::iterator::{Direction, IteratorMode, StorageIterator};
+use crate::{ColumnFamily, Result, StorageError, StorageOptions, WriteBatch};
+use parking_lot::RwLock;
 use rocksdb::checkpoint::Checkpoint;
-use rocksdb::{BoundColumnFamily, ColumnFamilyDescriptor, IteratorMode as RocksIteratorMode, Options as DBOptions, WriteBatch as RocksDBWriteBatch, WriteOptions, DB};
+use rocksdb::{
+    BoundColumnFamily, ColumnFamilyDescriptor, Options as DBOptions,
+    WriteBatch as RocksDBWriteBatch, WriteOptions, DB,
+};
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
 
 /// Main storage struct that wraps RocksDB.
 ///
@@ -37,19 +41,11 @@ pub struct Storage {
     /// RocksDB database handle (thread-safe via Arc)
     db: Arc<DB>,
 
-    /// Cached column family handles for O(1) lookup
-    cf_handles: HashMap<ColumnFamily, Arc<BoundColumnFamily<'static>>>,
-
     /// Storage configuration options
+    #[allow(dead_code)]
     config: StorageOptions,
 
     /// Cache of last log index per log CF (for performance)
-    ///
-    /// Key: ColumnFamily (only log CFs: SystemRaftLog, DataRaftLog)
-    /// Value: Last log index in that CF
-    ///
-    /// This cache is populated on startup by `warm_up_index_cache()` and
-    /// updated on every log append operation.
     last_log_index_cache: Arc<RwLock<HashMap<ColumnFamily, u64>>>,
 }
 
@@ -94,7 +90,7 @@ impl Storage {
     /// let storage = Storage::new(options)?;
     /// # Ok::<(), seshat_storage::StorageError>(())
     /// ```
-    pub fn new(options: StorageOptions) -> Result<Self> {
+    pub fn new(mut options: StorageOptions) -> Result<Self> {
         // Step 1: Validate options
         options.validate()?;
 
@@ -139,16 +135,19 @@ impl Storage {
                         (options.target_file_size_mb * 1024 * 1024) as u64,
                     );
 
-                    // Set prefix extractor if provided
-                    if let Some(ref prefix_extractor) = cf_config.prefix_extractor {
-                        cf_opts.set_prefix_extractor(prefix_extractor.clone());
+                    // Set prefix extractor if provided (need mutable access)
+                    if let Some(cf_config) = options.cf_options.get_mut(cf) {
+                        if let Some(prefix_extractor) = cf_config.prefix_extractor.take() {
+                            cf_opts.set_prefix_extractor(prefix_extractor);
+                        }
                     }
                 } else {
                     // Use global defaults
                     cf_opts.set_write_buffer_size(options.write_buffer_size_mb * 1024 * 1024);
                     cf_opts.set_max_write_buffer_number(options.max_write_buffer_number as i32);
-                    cf_opts
-                        .set_target_file_size_base((options.target_file_size_mb * 1024 * 1024) as u64);
+                    cf_opts.set_target_file_size_base(
+                        (options.target_file_size_mb * 1024 * 1024) as u64,
+                    );
                 }
 
                 ColumnFamilyDescriptor::new(cf.as_str(), cf_opts)
@@ -159,34 +158,12 @@ impl Storage {
         let db = DB::open_cf_descriptors(&db_opts, &options.data_dir, cf_descriptors)?;
         let db = Arc::new(db);
 
-        // Step 5: Cache column family handles
-        let mut cf_handles = HashMap::new();
-        for cf in ColumnFamily::all().iter() {
-            let cf_handle = db
-                .cf_handle(cf.as_str())
-                .ok_or_else(|| StorageError::ColumnFamilyNotFound {
-                    name: cf.as_str().to_string(),
-                })?;
-
-            // SAFETY: We need to transmute the lifetime of BoundColumnFamily from 'db to 'static.
-            // This is safe because:
-            // 1. We store the DB in an Arc, ensuring it outlives all references
-            // 2. The cf_handle is obtained from the DB and remains valid as long as DB exists
-            // 3. We drop cf_handles before dropping the DB (in close())
-            // 4. RocksDB guarantees CF handles are valid for the lifetime of the DB
-            let cf_handle_static: &'static BoundColumnFamily =
-                unsafe { std::mem::transmute(cf_handle) };
-
-            cf_handles.insert(*cf, Arc::new(cf_handle_static));
-        }
-
-        // Step 6: Initialize empty log index cache
+        // Step 5: Initialize empty log index cache
         let last_log_index_cache = Arc::new(RwLock::new(HashMap::new()));
 
-        // Step 7: Create Storage instance
+        // Step 6: Create Storage instance
         let mut storage = Self {
             db,
-            cf_handles,
             config: options,
             last_log_index_cache,
         };
@@ -197,28 +174,9 @@ impl Storage {
         Ok(storage)
     }
 
-    /// Gets column family handle (internal helper).
-    ///
-    /// Returns a reference to the cached column family handle.
-    /// This is an internal helper method used by other storage operations.
-    ///
-    /// # Arguments
-    ///
-    /// * `cf` - Column family to get handle for
-    ///
-    /// # Returns
-    ///
-    /// Reference to the BoundColumnFamily handle
-    ///
-    /// # Errors
-    ///
-    /// Returns `StorageError::ColumnFamilyNotFound` if the column family
-    /// doesn't exist in the cache (should never happen if Storage was
-    /// constructed correctly).
-    fn get_cf_handle(&self, cf: ColumnFamily) -> Result<&BoundColumnFamily> {
-        self.cf_handles
-            .get(&cf)
-            .map(|arc| arc.as_ref())
+    fn get_cf_handle(&self, cf: ColumnFamily) -> Result<Arc<BoundColumnFamily<'_>>> {
+        self.db
+            .cf_handle(cf.as_str())
             .ok_or_else(|| StorageError::ColumnFamilyNotFound {
                 name: cf.as_str().to_string(),
             })
@@ -250,10 +208,7 @@ impl Storage {
 
         for cf in &log_cfs {
             if let Some(last_index) = self.get_last_log_index_from_db(*cf)? {
-                let mut cache = self
-                    .last_log_index_cache
-                    .write()
-                    .expect("Storage: last_log_index_cache lock poisoned");
+                let mut cache = self.last_log_index_cache.write();
                 cache.insert(*cf, last_index);
 
                 // Log cache warm-up (using eprintln for now, will switch to tracing later)
@@ -307,19 +262,17 @@ impl Storage {
 
         let cf_handle = self.get_cf_handle(cf)?;
 
-        // Create reverse iterator (starts at end)
-        let mut iter = self.db.iterator_cf(cf_handle, RocksIteratorMode::End);
+        let mut iter = self.db.raw_iterator_cf(&cf_handle);
+        iter.seek_to_last();
 
-        // Get last key-value pair
-        if let Some(Ok((key, _value))) = iter.next() {
-            // Parse key: "log:00000000000000000042" -> 42
-            let key_str = String::from_utf8(key.to_vec()).map_err(|_| {
-                StorageError::CorruptedData {
+        if iter.valid() {
+            let key = iter.key().unwrap();
+            let key_str =
+                String::from_utf8(key.to_vec()).map_err(|_| StorageError::CorruptedData {
                     cf: cf.as_str().to_string(),
                     key: key.to_vec(),
                     reason: "Key is not valid UTF-8".to_string(),
-                }
-            })?;
+                })?;
 
             // Strip "log:" prefix
             if !key_str.starts_with("log:") {
@@ -331,13 +284,13 @@ impl Storage {
             }
 
             let index_str = &key_str[4..]; // Skip "log:"
-            let index = index_str.parse::<u64>().map_err(|_| {
-                StorageError::CorruptedData {
+            let index = index_str
+                .parse::<u64>()
+                .map_err(|_| StorageError::CorruptedData {
                     cf: cf.as_str().to_string(),
                     key: key.to_vec(),
                     reason: format!("Cannot parse log index from: {}", index_str),
-                }
-            })?;
+                })?;
 
             Ok(Some(index))
         } else {
@@ -378,7 +331,7 @@ impl Storage {
         // Flush all column families before closing
         for cf in ColumnFamily::all().iter() {
             let cf_handle = self.get_cf_handle(*cf)?;
-            self.db.flush_cf(cf_handle)?;
+            self.db.flush_cf(&cf_handle)?;
         }
 
         // RocksDB will be closed when Arc<DB> is dropped
@@ -433,7 +386,7 @@ impl Storage {
 
         // Step 2: Call RocksDB get_cf
         // RocksDB searches: Memtable → Block cache → Bloom filter → SST files
-        let result = self.db.get_cf(cf_handle, key)?;
+        let result = self.db.get_cf(&cf_handle, key)?;
 
         // Step 3: Return Ok(Some(value)) if found, Ok(None) if not found
         Ok(result)
@@ -484,7 +437,7 @@ impl Storage {
         // Otherwise, use default (async WAL)
 
         // Step 3: Call RocksDB put_cf_opt
-        self.db.put_cf_opt(cf_handle, key, value, &write_opts)?;
+        self.db.put_cf_opt(&cf_handle, key, value, &write_opts)?;
 
         Ok(())
     }
@@ -528,7 +481,7 @@ impl Storage {
         }
 
         // Step 3: Call RocksDB delete_cf_opt
-        self.db.delete_cf_opt(cf_handle, key, &write_opts)?;
+        self.db.delete_cf_opt(&cf_handle, key, &write_opts)?;
 
         // Step 4: Return Ok(()) - RocksDB delete is idempotent
         Ok(())
@@ -570,7 +523,7 @@ impl Storage {
 
         // Step 2: Use get_pinned_cf which can use bloom filter
         // This is more efficient than get_cf as it may avoid reading the value
-        let result = self.db.get_pinned_cf(cf_handle, key)?;
+        let result = self.db.get_pinned_cf(&cf_handle, key)?;
 
         // Step 3: Return true if Some, false if None
         Ok(result.is_some())
@@ -617,7 +570,8 @@ impl Storage {
         if !cf.is_log_cf() {
             return Err(StorageError::InvalidColumnFamily {
                 cf: cf.as_str().to_string(),
-                reason: "append_log_entry only works on log CFs (SystemRaftLog, DataRaftLog)".to_string(),
+                reason: "append_log_entry only works on log CFs (SystemRaftLog, DataRaftLog)"
+                    .to_string(),
             });
         }
 
@@ -625,7 +579,7 @@ impl Storage {
         let last_index = self.get_cached_last_log_index(cf)?;
 
         // Step 3: Validate sequential index
-        let expected_index = match last_index {
+        let _expected_index = match last_index {
             None => {
                 // First entry must be index 1
                 if index != 1 {
@@ -664,7 +618,8 @@ impl Storage {
         // Step 5: Write to RocksDB (no fsync for log CFs)
         let cf_handle = self.get_cf_handle(cf)?;
         let write_opts = WriteOptions::default();
-        self.db.put_cf_opt(cf_handle, key.as_bytes(), entry_bytes, &write_opts)?;
+        self.db
+            .put_cf_opt(&cf_handle, key.as_bytes(), entry_bytes, &write_opts)?;
 
         // Step 6: Update cache
         self.update_cached_last_log_index(cf, index)?;
@@ -707,7 +662,8 @@ impl Storage {
         if !cf.is_log_cf() {
             return Err(StorageError::InvalidColumnFamily {
                 cf: cf.as_str().to_string(),
-                reason: "get_log_range only works on log CFs (SystemRaftLog, DataRaftLog)".to_string(),
+                reason: "get_log_range only works on log CFs (SystemRaftLog, DataRaftLog)"
+                    .to_string(),
             });
         }
 
@@ -759,7 +715,8 @@ impl Storage {
         if !cf.is_log_cf() {
             return Err(StorageError::InvalidColumnFamily {
                 cf: cf.as_str().to_string(),
-                reason: "truncate_log_before only works on log CFs (SystemRaftLog, DataRaftLog)".to_string(),
+                reason: "truncate_log_before only works on log CFs (SystemRaftLog, DataRaftLog)"
+                    .to_string(),
             });
         }
 
@@ -792,13 +749,13 @@ impl Storage {
             let last = last_index.unwrap();
             for index in 1..=last {
                 let key = format_log_key(index);
-                batch.delete_cf(cf_handle, key.as_bytes());
+                batch.delete_cf(&cf_handle, key.as_bytes());
             }
         } else {
             // Delete entries [1, truncate_index)
             for index in 1..truncate_index {
                 let key = format_log_key(index);
-                batch.delete_cf(cf_handle, key.as_bytes());
+                batch.delete_cf(&cf_handle, key.as_bytes());
             }
         }
 
@@ -807,10 +764,7 @@ impl Storage {
 
         // Step 6: Invalidate cache if entire log was deleted
         if should_invalidate_cache {
-            let mut cache = self
-                .last_log_index_cache
-                .write()
-                .expect("Storage: last_log_index_cache lock poisoned");
+            let mut cache = self.last_log_index_cache.write();
             cache.remove(&cf);
         }
 
@@ -869,10 +823,7 @@ impl Storage {
     fn get_cached_last_log_index(&self, cf: ColumnFamily) -> Result<Option<u64>> {
         // Step 1: Acquire read lock and check cache
         {
-            let cache = self
-                .last_log_index_cache
-                .read()
-                .expect("Storage: last_log_index_cache lock poisoned");
+            let cache = self.last_log_index_cache.read();
 
             if let Some(&index) = cache.get(&cf) {
                 // Cache hit - return immediately (O(1))
@@ -886,10 +837,7 @@ impl Storage {
 
         // Step 3: Update cache with result
         if let Some(idx) = index {
-            let mut cache = self
-                .last_log_index_cache
-                .write()
-                .expect("Storage: last_log_index_cache lock poisoned");
+            let mut cache = self.last_log_index_cache.write();
             cache.insert(cf, idx);
         }
 
@@ -910,31 +858,12 @@ impl Storage {
     ///
     /// Ok(()) on success
     fn update_cached_last_log_index(&self, cf: ColumnFamily, new_index: u64) -> Result<()> {
-        // Step 1: Acquire write lock
-        let mut cache = self
-            .last_log_index_cache
-            .write()
-            .expect("Storage: last_log_index_cache lock poisoned");
+        let mut cache = self.last_log_index_cache.write();
 
-        // Step 2: Insert new index
         cache.insert(cf, new_index);
 
         // Step 3: Return Ok
         Ok(())
-    }
-
-    /// Invalidate entire index cache.
-    ///
-    /// Clears all cached log indices. Used after snapshot restoration.
-    pub(crate) fn invalidate_index_cache(&self) {
-        // Step 1: Acquire write lock
-        let mut cache = self
-            .last_log_index_cache
-            .write()
-            .expect("Storage: last_log_index_cache lock poisoned");
-
-        // Step 2: Clear entire cache
-        cache.clear();
     }
 
     // ========================================================================
@@ -988,13 +917,11 @@ impl Storage {
             let cf_handle = self.get_cf_handle(op.cf())?;
 
             if op.is_put() {
-                // Put operation
                 if let Some(value) = op.value() {
-                    rocksdb_batch.put_cf(cf_handle, op.key(), value);
+                    rocksdb_batch.put_cf(&cf_handle, op.key(), value);
                 }
             } else {
-                // Delete operation
-                rocksdb_batch.delete_cf(cf_handle, op.key());
+                rocksdb_batch.delete_cf(&cf_handle, op.key());
             }
         }
 
@@ -1047,7 +974,7 @@ impl Storage {
     ///
     /// // Iterate forward from start
     /// let mut iter = storage.iterator(ColumnFamily::DataKv, IteratorMode::Start)?;
-    /// while let Some((key, value)) = iter.next() {
+    /// while let Some((key, value)) = iter.step_forward().unwrap() {
     ///     println!("Key: {:?}", key);
     /// }
     ///
@@ -1058,28 +985,20 @@ impl Storage {
     /// )?;
     /// # Ok::<(), seshat_storage::StorageError>(())
     /// ```
-    pub fn iterator(&self, cf: ColumnFamily, mode: IteratorMode) -> Result<StorageIterator> {
-        // Step 1: Get CF handle
+    pub fn iterator(&self, cf: ColumnFamily, mode: IteratorMode) -> Result<StorageIterator<'_>> {
         let cf_handle = self.get_cf_handle(cf)?;
+        let mut iter = self.db.raw_iterator_cf(&cf_handle);
 
-        // Step 2: Convert our IteratorMode to RocksDB's IteratorMode
-        let rocks_mode = match mode {
-            IteratorMode::Start => RocksIteratorMode::Start,
-            IteratorMode::End => RocksIteratorMode::End,
-            IteratorMode::From(key, direction) => {
-                let rocks_direction = match direction {
-                    Direction::Forward => rocksdb::Direction::Forward,
-                    Direction::Reverse => rocksdb::Direction::Reverse,
-                };
-                RocksIteratorMode::From(&key, rocks_direction)
-            }
+        match mode {
+            IteratorMode::Start => iter.seek_to_first(),
+            IteratorMode::End => iter.seek_to_last(),
+            IteratorMode::From(key, direction) => match direction {
+                Direction::Forward => iter.seek(&key),
+                Direction::Reverse => iter.seek_for_prev(&key),
+            },
         };
 
-        // Step 3: Create RocksDB iterator
-        let db_iter = self.db.iterator_cf(cf_handle, rocks_mode);
-
-        // Step 4: Wrap in StorageIterator
-        Ok(StorageIterator::new(db_iter, cf))
+        Ok(StorageIterator::new(iter, cf))
     }
 
     // ========================================================================

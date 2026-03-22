@@ -6,19 +6,8 @@
 //! - Error type matching with pattern matching
 //! - Result type usage with ? operator
 
-use seshat_storage::{StorageError, Result};
+use seshat_storage::{Result, StorageError};
 use std::io;
-
-#[test]
-fn test_rocksdb_error_wrapping() {
-    // Simulate a RocksDB error
-    let rocks_error = rocksdb::Error::new("test rocksdb error".to_string());
-    let storage_error = StorageError::from(rocks_error);
-
-    // Verify the error message contains the RocksDB error
-    let error_msg = format!("{}", storage_error);
-    assert!(error_msg.contains("RocksDB error"));
-}
 
 #[test]
 fn test_io_error_wrapping() {

@@ -7,7 +7,6 @@ use seshat_storage::{
     iterator::{Direction, IteratorMode},
     ColumnFamily, Storage, StorageOptions,
 };
-use std::path::PathBuf;
 use tempfile::TempDir;
 
 /// Helper to create a test storage with temp directory
@@ -40,7 +39,7 @@ fn test_iterator_start_mode() {
         .unwrap();
 
     assert!(iter.valid());
-    let (key, value) = iter.next().unwrap();
+    let (key, value) = iter.step_forward().unwrap().unwrap();
     assert_eq!(&*key, b"a");
     assert_eq!(&*value, b"val_a");
 }
@@ -55,7 +54,7 @@ fn test_iterator_end_mode() {
         .unwrap();
 
     assert!(iter.valid());
-    let (key, value) = iter.prev().unwrap();
+    let (key, value) = iter.step_backward().unwrap().unwrap();
     assert_eq!(&*key, b"c");
     assert_eq!(&*value, b"val_c");
 }
@@ -63,7 +62,12 @@ fn test_iterator_end_mode() {
 #[test]
 fn test_iterator_from_mode_forward() {
     let (storage, _temp_dir) = create_test_storage();
-    populate_test_data(&storage, ColumnFamily::DataKv, &["a", "b", "c", "d"], "val_");
+    populate_test_data(
+        &storage,
+        ColumnFamily::DataKv,
+        &["a", "b", "c", "d"],
+        "val_",
+    );
 
     let mut iter = storage
         .iterator(
@@ -73,14 +77,19 @@ fn test_iterator_from_mode_forward() {
         .unwrap();
 
     assert!(iter.valid());
-    let (key, _) = iter.next().unwrap();
+    let (key, _) = iter.step_forward().unwrap().unwrap();
     assert_eq!(&*key, b"b");
 }
 
 #[test]
 fn test_iterator_from_mode_reverse() {
     let (storage, _temp_dir) = create_test_storage();
-    populate_test_data(&storage, ColumnFamily::DataKv, &["a", "b", "c", "d"], "val_");
+    populate_test_data(
+        &storage,
+        ColumnFamily::DataKv,
+        &["a", "b", "c", "d"],
+        "val_",
+    );
 
     let mut iter = storage
         .iterator(
@@ -90,7 +99,7 @@ fn test_iterator_from_mode_reverse() {
         .unwrap();
 
     assert!(iter.valid());
-    let (key, _) = iter.prev().unwrap();
+    let (key, _) = iter.step_backward().unwrap().unwrap();
     assert_eq!(&*key, b"c");
 }
 
@@ -103,7 +112,7 @@ fn test_iterator_on_empty_cf() {
         .unwrap();
 
     assert!(!iter.valid());
-    assert!(iter.next().is_none());
+    assert!(iter.step_forward().unwrap().is_none());
     assert!(iter.key().is_none());
     assert!(iter.value().is_none());
 }
@@ -112,13 +121,12 @@ fn test_iterator_on_empty_cf() {
 fn test_iterator_works_on_all_cfs() {
     let (storage, _temp_dir) = create_test_storage();
 
-    // Test that iterator can be created for all column families
     for cf in ColumnFamily::all() {
-        storage.put(*cf, b"test", b"value").unwrap();
+        storage.put(cf, b"test", b"value").unwrap();
 
-        let mut iter = storage.iterator(*cf, IteratorMode::Start).unwrap();
+        let mut iter = storage.iterator(cf, IteratorMode::Start).unwrap();
         assert!(iter.valid());
-        assert!(iter.next().is_some());
+        assert!(iter.step_forward().unwrap().is_some());
     }
 }
 
@@ -154,7 +162,6 @@ fn test_seek_to_first() {
         .iterator(ColumnFamily::DataKv, IteratorMode::End)
         .unwrap();
 
-    // Start at end, then seek to first
     iter.seek_to_first();
     assert!(iter.valid());
     assert_eq!(&*iter.key().unwrap(), b"a");
@@ -169,7 +176,6 @@ fn test_seek_to_last() {
         .iterator(ColumnFamily::DataKv, IteratorMode::Start)
         .unwrap();
 
-    // Start at beginning, then seek to last
     iter.seek_to_last();
     assert!(iter.valid());
     assert_eq!(&*iter.key().unwrap(), b"c");
@@ -184,7 +190,6 @@ fn test_seek_to_nonexistent_key_finds_next() {
         .iterator(ColumnFamily::DataKv, IteratorMode::Start)
         .unwrap();
 
-    // Seek to "b" (doesn't exist), should position at "c" (first key >= "b")
     iter.seek(b"b");
     assert!(iter.valid());
     assert_eq!(&*iter.key().unwrap(), b"c");
@@ -199,7 +204,6 @@ fn test_seek_before_first_key() {
         .iterator(ColumnFamily::DataKv, IteratorMode::Start)
         .unwrap();
 
-    // Seek before first key, should position at first key
     iter.seek(b"a");
     assert!(iter.valid());
     assert_eq!(&*iter.key().unwrap(), b"b");
@@ -214,7 +218,6 @@ fn test_seek_after_last_key() {
         .iterator(ColumnFamily::DataKv, IteratorMode::Start)
         .unwrap();
 
-    // Seek after last key, iterator should become invalid
     iter.seek(b"z");
     assert!(!iter.valid());
     assert!(iter.key().is_none());
@@ -233,16 +236,16 @@ fn test_next_iterates_forward() {
         .iterator(ColumnFamily::DataKv, IteratorMode::Start)
         .unwrap();
 
-    let (key, _) = iter.next().unwrap();
+    let (key, _) = iter.step_forward().unwrap().unwrap();
     assert_eq!(&*key, b"a");
 
-    let (key, _) = iter.next().unwrap();
+    let (key, _) = iter.step_forward().unwrap().unwrap();
     assert_eq!(&*key, b"b");
 
-    let (key, _) = iter.next().unwrap();
+    let (key, _) = iter.step_forward().unwrap().unwrap();
     assert_eq!(&*key, b"c");
 
-    assert!(iter.next().is_none());
+    assert!(iter.step_forward().unwrap().is_none());
 }
 
 #[test]
@@ -254,8 +257,8 @@ fn test_next_returns_none_at_end() {
         .iterator(ColumnFamily::DataKv, IteratorMode::Start)
         .unwrap();
 
-    iter.next().unwrap(); // Consume the only element
-    assert!(iter.next().is_none());
+    iter.step_forward().unwrap();
+    assert!(iter.step_forward().unwrap().is_none());
     assert!(!iter.valid());
 }
 
@@ -270,7 +273,7 @@ fn test_iterate_all_keys_forward() {
         .unwrap();
 
     let mut collected_keys = Vec::new();
-    while let Some((key, _value)) = iter.next() {
+    while let Some((key, _value)) = iter.step_forward().unwrap() {
         collected_keys.push(String::from_utf8(key.to_vec()).unwrap());
     }
 
@@ -286,7 +289,7 @@ fn test_iterate_empty_cf() {
         .unwrap();
 
     let mut count = 0;
-    while iter.next().is_some() {
+    while iter.step_forward().unwrap().is_some() {
         count += 1;
     }
 
@@ -305,7 +308,7 @@ fn test_iterate_single_key() {
         .unwrap();
 
     let mut count = 0;
-    while let Some((key, value)) = iter.next() {
+    while let Some((key, value)) = iter.step_forward().unwrap() {
         assert_eq!(&*key, b"only");
         assert_eq!(&*value, b"value");
         count += 1;
@@ -318,7 +321,6 @@ fn test_iterate_single_key() {
 fn test_iterate_1000_keys() {
     let (storage, _temp_dir) = create_test_storage();
 
-    // Insert 1000 keys
     for i in 0..1000 {
         let key = format!("key_{:04}", i);
         let value = format!("value_{}", i);
@@ -332,7 +334,7 @@ fn test_iterate_1000_keys() {
         .unwrap();
 
     let mut count = 0;
-    while iter.next().is_some() {
+    while iter.step_forward().unwrap().is_some() {
         count += 1;
     }
 
@@ -343,7 +345,6 @@ fn test_iterate_1000_keys() {
 fn test_next_preserves_order() {
     let (storage, _temp_dir) = create_test_storage();
 
-    // Insert keys in random order
     let keys = vec!["zebra", "apple", "mango", "banana"];
     for key in &keys {
         storage
@@ -356,11 +357,10 @@ fn test_next_preserves_order() {
         .unwrap();
 
     let mut collected_keys = Vec::new();
-    while let Some((key, _)) = iter.next() {
+    while let Some((key, _)) = iter.step_forward().unwrap() {
         collected_keys.push(String::from_utf8(key.to_vec()).unwrap());
     }
 
-    // Should be in lexicographic order
     assert_eq!(collected_keys, vec!["apple", "banana", "mango", "zebra"]);
 }
 
@@ -373,14 +373,11 @@ fn test_key_value_methods_work_during_iteration() {
         .iterator(ColumnFamily::DataKv, IteratorMode::Start)
         .unwrap();
 
-    // Check initial position
     assert_eq!(&*iter.key().unwrap(), b"a");
     assert_eq!(&*iter.value().unwrap(), b"val_a");
 
-    // Advance
-    iter.next();
+    iter.step_forward().unwrap();
 
-    // Check new position
     assert_eq!(&*iter.key().unwrap(), b"b");
     assert_eq!(&*iter.value().unwrap(), b"val_b");
 }
@@ -398,16 +395,16 @@ fn test_prev_iterates_backward() {
         .iterator(ColumnFamily::DataKv, IteratorMode::End)
         .unwrap();
 
-    let (key, _) = iter.prev().unwrap();
+    let (key, _) = iter.step_backward().unwrap().unwrap();
     assert_eq!(&*key, b"c");
 
-    let (key, _) = iter.prev().unwrap();
+    let (key, _) = iter.step_backward().unwrap().unwrap();
     assert_eq!(&*key, b"b");
 
-    let (key, _) = iter.prev().unwrap();
+    let (key, _) = iter.step_backward().unwrap().unwrap();
     assert_eq!(&*key, b"a");
 
-    assert!(iter.prev().is_none());
+    assert!(iter.step_backward().unwrap().is_none());
 }
 
 #[test]
@@ -419,8 +416,8 @@ fn test_prev_returns_none_at_start() {
         .iterator(ColumnFamily::DataKv, IteratorMode::End)
         .unwrap();
 
-    iter.prev().unwrap(); // Consume the only element
-    assert!(iter.prev().is_none());
+    iter.step_backward().unwrap();
+    assert!(iter.step_backward().unwrap().is_none());
     assert!(!iter.valid());
 }
 
@@ -435,11 +432,10 @@ fn test_iterate_all_keys_reverse() {
         .unwrap();
 
     let mut collected_keys = Vec::new();
-    while let Some((key, _value)) = iter.prev() {
+    while let Some((key, _value)) = iter.step_backward().unwrap() {
         collected_keys.push(String::from_utf8(key.to_vec()).unwrap());
     }
 
-    // Should be in reverse order
     let mut expected = keys.clone();
     expected.reverse();
     assert_eq!(collected_keys, expected);
@@ -457,24 +453,29 @@ fn test_seek_to_last_then_prev() {
     iter.seek_to_last();
     assert_eq!(&*iter.key().unwrap(), b"c");
 
-    let (key, _) = iter.prev().unwrap();
+    let (key, _) = iter.step_backward().unwrap().unwrap();
     assert_eq!(&*key, b"c");
 
-    let (key, _) = iter.prev().unwrap();
+    let (key, _) = iter.step_backward().unwrap().unwrap();
     assert_eq!(&*key, b"b");
 }
 
 #[test]
 fn test_from_end_mode_iterates_backward() {
     let (storage, _temp_dir) = create_test_storage();
-    populate_test_data(&storage, ColumnFamily::DataKv, &["a", "b", "c", "d"], "val_");
+    populate_test_data(
+        &storage,
+        ColumnFamily::DataKv,
+        &["a", "b", "c", "d"],
+        "val_",
+    );
 
     let mut iter = storage
         .iterator(ColumnFamily::DataKv, IteratorMode::End)
         .unwrap();
 
     let mut collected = Vec::new();
-    while let Some((key, _)) = iter.prev() {
+    while let Some((key, _)) = iter.step_backward().unwrap() {
         collected.push(String::from_utf8(key.to_vec()).unwrap());
     }
 
@@ -485,7 +486,6 @@ fn test_from_end_mode_iterates_backward() {
 fn test_reverse_preserves_order() {
     let (storage, _temp_dir) = create_test_storage();
 
-    // Insert keys
     let keys = vec!["zebra", "apple", "mango"];
     for key in &keys {
         storage
@@ -498,11 +498,10 @@ fn test_reverse_preserves_order() {
         .unwrap();
 
     let mut collected_keys = Vec::new();
-    while let Some((key, _)) = iter.prev() {
+    while let Some((key, _)) = iter.step_backward().unwrap() {
         collected_keys.push(String::from_utf8(key.to_vec()).unwrap());
     }
 
-    // Should be in reverse lexicographic order
     assert_eq!(collected_keys, vec!["zebra", "mango", "apple"]);
 }
 
@@ -531,7 +530,7 @@ fn test_valid_returns_false_after_exhaustion() {
         .iterator(ColumnFamily::DataKv, IteratorMode::Start)
         .unwrap();
 
-    iter.next(); // Consume the only key
+    iter.step_forward().unwrap();
     assert!(!iter.valid());
 }
 
@@ -566,52 +565,52 @@ fn test_value_returns_current_value() {
 #[test]
 fn test_iterator_snapshot_isolation() {
     let (storage, _temp_dir) = create_test_storage();
-    storage.put(ColumnFamily::DataKv, b"key1", b"value1").unwrap();
+    storage
+        .put(ColumnFamily::DataKv, b"key1", b"value1")
+        .unwrap();
 
-    // Create iterator (captures snapshot)
     let mut iter = storage
         .iterator(ColumnFamily::DataKv, IteratorMode::Start)
         .unwrap();
 
-    // Write more data after iterator creation
-    storage.put(ColumnFamily::DataKv, b"key2", b"value2").unwrap();
+    storage
+        .put(ColumnFamily::DataKv, b"key2", b"value2")
+        .unwrap();
 
-    // Iterator should only see data from its snapshot
     let mut count = 0;
-    while iter.next().is_some() {
+    while iter.step_forward().unwrap().is_some() {
         count += 1;
     }
 
-    // Should only see key1, not key2
     assert_eq!(count, 1);
 }
 
 #[test]
 fn test_multiple_iterators_independent() {
     let (storage, _temp_dir) = create_test_storage();
-    storage.put(ColumnFamily::DataKv, b"key1", b"value1").unwrap();
+    storage
+        .put(ColumnFamily::DataKv, b"key1", b"value1")
+        .unwrap();
 
-    // Create first iterator
     let mut iter1 = storage
         .iterator(ColumnFamily::DataKv, IteratorMode::Start)
         .unwrap();
 
-    // Add more data
-    storage.put(ColumnFamily::DataKv, b"key2", b"value2").unwrap();
+    storage
+        .put(ColumnFamily::DataKv, b"key2", b"value2")
+        .unwrap();
 
-    // Create second iterator
     let mut iter2 = storage
         .iterator(ColumnFamily::DataKv, IteratorMode::Start)
         .unwrap();
 
-    // iter1 should see 1 key, iter2 should see 2 keys
     let mut count1 = 0;
-    while iter1.next().is_some() {
+    while iter1.step_forward().unwrap().is_some() {
         count1 += 1;
     }
 
     let mut count2 = 0;
-    while iter2.next().is_some() {
+    while iter2.step_forward().unwrap().is_some() {
         count2 += 1;
     }
 
@@ -628,45 +627,44 @@ fn test_iterator_unaffected_by_writes() {
         .iterator(ColumnFamily::DataKv, IteratorMode::Start)
         .unwrap();
 
-    // Read first key
-    let (key, _) = iter.next().unwrap();
+    let (key, _) = iter.step_forward().unwrap().unwrap();
     assert_eq!(&*key, b"a");
 
-    // Modify data during iteration
     storage
         .put(ColumnFamily::DataKv, b"b", b"modified")
         .unwrap();
     storage.delete(ColumnFamily::DataKv, b"c").unwrap();
 
-    // Iterator should see original data
-    let (key, value) = iter.next().unwrap();
+    let (key, value) = iter.step_forward().unwrap().unwrap();
     assert_eq!(&*key, b"b");
-    assert_eq!(&*value, b"val_b"); // Original value, not "modified"
+    assert_eq!(&*value, b"val_b");
 
-    let (key, value) = iter.next().unwrap();
+    let (key, value) = iter.step_forward().unwrap().unwrap();
     assert_eq!(&*key, b"c");
-    assert_eq!(&*value, b"val_c"); // Still visible, not deleted
+    assert_eq!(&*value, b"val_c");
 
-    assert!(iter.next().is_none());
+    assert!(iter.step_forward().unwrap().is_none());
 }
 
 #[test]
 fn test_iterator_sees_consistent_view() {
     let (storage, _temp_dir) = create_test_storage();
-    storage.put(ColumnFamily::DataKv, b"key1", b"value1").unwrap();
-    storage.put(ColumnFamily::DataKv, b"key2", b"value2").unwrap();
+    storage
+        .put(ColumnFamily::DataKv, b"key1", b"value1")
+        .unwrap();
+    storage
+        .put(ColumnFamily::DataKv, b"key2", b"value2")
+        .unwrap();
 
     let mut iter = storage
         .iterator(ColumnFamily::DataKv, IteratorMode::Start)
         .unwrap();
 
-    // Delete all keys after iterator creation
     storage.delete(ColumnFamily::DataKv, b"key1").unwrap();
     storage.delete(ColumnFamily::DataKv, b"key2").unwrap();
 
-    // Iterator should still see both keys
     let mut count = 0;
-    while iter.next().is_some() {
+    while iter.step_forward().unwrap().is_some() {
         count += 1;
     }
 
@@ -683,7 +681,6 @@ fn test_range_query_forward() {
     let keys = vec!["a", "b", "c", "d", "e", "f"];
     populate_test_data(&storage, ColumnFamily::DataKv, &keys, "val_");
 
-    // Range query from "b" to "e"
     let mut iter = storage
         .iterator(
             ColumnFamily::DataKv,
@@ -692,9 +689,9 @@ fn test_range_query_forward() {
         .unwrap();
 
     let mut collected = Vec::new();
-    while let Some((key, _)) = iter.next() {
+    while let Some((key, _)) = iter.step_forward().unwrap() {
         let key_str = String::from_utf8(key.to_vec()).unwrap();
-        if key_str.as_bytes() >= b"e" {
+        if key_str.as_str() >= "e" {
             break;
         }
         collected.push(key_str);
@@ -709,7 +706,6 @@ fn test_range_query_reverse() {
     let keys = vec!["a", "b", "c", "d", "e", "f"];
     populate_test_data(&storage, ColumnFamily::DataKv, &keys, "val_");
 
-    // Range query from "e" down to "b"
     let mut iter = storage
         .iterator(
             ColumnFamily::DataKv,
@@ -718,9 +714,9 @@ fn test_range_query_reverse() {
         .unwrap();
 
     let mut collected = Vec::new();
-    while let Some((key, _)) = iter.prev() {
+    while let Some((key, _)) = iter.step_backward().unwrap() {
         let key_str = String::from_utf8(key.to_vec()).unwrap();
-        if key_str.as_bytes() < b"b" {
+        if key_str.as_str() < "b" {
             break;
         }
         collected.push(key_str);
@@ -733,14 +729,22 @@ fn test_range_query_reverse() {
 fn test_prefix_scan() {
     let (storage, _temp_dir) = create_test_storage();
 
-    // Insert keys with different prefixes
-    storage.put(ColumnFamily::DataKv, b"user:1", b"alice").unwrap();
-    storage.put(ColumnFamily::DataKv, b"user:2", b"bob").unwrap();
-    storage.put(ColumnFamily::DataKv, b"user:3", b"charlie").unwrap();
-    storage.put(ColumnFamily::DataKv, b"post:1", b"hello").unwrap();
-    storage.put(ColumnFamily::DataKv, b"post:2", b"world").unwrap();
+    storage
+        .put(ColumnFamily::DataKv, b"user:1", b"alice")
+        .unwrap();
+    storage
+        .put(ColumnFamily::DataKv, b"user:2", b"bob")
+        .unwrap();
+    storage
+        .put(ColumnFamily::DataKv, b"user:3", b"charlie")
+        .unwrap();
+    storage
+        .put(ColumnFamily::DataKv, b"post:1", b"hello")
+        .unwrap();
+    storage
+        .put(ColumnFamily::DataKv, b"post:2", b"world")
+        .unwrap();
 
-    // Scan all "user:" prefixed keys
     let mut iter = storage
         .iterator(
             ColumnFamily::DataKv,
@@ -749,7 +753,7 @@ fn test_prefix_scan() {
         .unwrap();
 
     let mut user_keys = Vec::new();
-    while let Some((key, _)) = iter.next() {
+    while let Some((key, _)) = iter.step_forward().unwrap() {
         let key_str = String::from_utf8(key.to_vec()).unwrap();
         if !key_str.starts_with("user:") {
             break;
@@ -764,7 +768,6 @@ fn test_prefix_scan() {
 fn test_bounded_iteration() {
     let (storage, _temp_dir) = create_test_storage();
 
-    // Insert 100 keys
     for i in 0..100 {
         let key = format!("key_{:03}", i);
         storage
@@ -772,13 +775,12 @@ fn test_bounded_iteration() {
             .unwrap();
     }
 
-    // Iterate with bound: stop after 10 keys
     let mut iter = storage
         .iterator(ColumnFamily::DataKv, IteratorMode::Start)
         .unwrap();
 
     let mut count = 0;
-    while iter.next().is_some() {
+    while iter.step_forward().unwrap().is_some() {
         count += 1;
         if count >= 10 {
             break;

@@ -189,6 +189,15 @@ pub enum StorageError {
         /// Reason why it's invalid
         reason: String,
     },
+
+    #[error("Lock poisoned: {0}")]
+    LockPoisoned(String),
+
+    #[error("Log range too large: start={start}, end={end}, max={max}")]
+    RangeTooLarge { start: u64, end: u64, max: u64 },
+
+    #[error("Batch too large: {operations} operations, max={max}")]
+    BatchTooLarge { operations: usize, max: usize },
 }
 
 /// Result type alias for storage operations.

@@ -1,5 +1,12 @@
 # Agent Instructions
 
+> **⚠️ Before Starting Work:** Load relevant skills for your task:
+> - Rust development: Use `rust-best-practices` and `rust-engineer` skills
+> - Async Rust: Use `rust-async-patterns` skill
+> - Debugging: Use `code:debug` skill
+> - Testing: Use `oracle:testing` or `python:testing` skill
+> - See [Skills Reference](#skills-reference) below for all available skills
+
 This project uses **spec-driven development** with **worktrees** and **stacked commits**.
 
 ## Development Workflow
@@ -259,11 +266,74 @@ seshat/
 bd ready
 
 # Navigate to worktree
-cd worktrees/grpc
+cd worktrees/rocksdb
 
 # Check status
 git status
-cargo test --workspace
 
-# Continue implementation
+# Run quality checks using mise tasks
+mise run storage:check    # Check for errors
+mise run storage:fmt-check # Check formatting
+mise run storage:clippy   # Run linter
+mise run storage:test     # Run tests
+mise run storage:all     # All of the above
 ```
+
+## Mise Tasks
+
+Use `mise run <task>` for common development tasks:
+
+```bash
+# Per-project tasks
+mise run check:storage       # Check seshat-storage
+mise run check:kv           # Check seshat-kv
+mise run check:resp         # Check seshat-resp
+mise run check:seshat       # Check seshat binary
+
+mise run fmt:storage         # Format seshat-storage
+mise run fmt:kv             # Format seshat-kv
+mise run fmt:resp           # Format seshat-resp
+mise run fmt:seshat         # Format seshat binary
+
+mise run lint:storage       # Lint seshat-storage
+mise run lint:kv           # Lint seshat-kv
+mise run lint:resp         # Lint seshat-resp
+mise run lint:seshat       # Lint seshat binary
+
+mise run test:storage       # Test seshat-storage
+mise run test:kv           # Test seshat-kv
+mise run test:resp         # Test seshat-resp
+mise run test:seshat       # Test seshat binary
+
+# All (per project)
+mise run check:all          # Check all crates
+mise run fmt:all           # Format all crates
+mise run lint:all          # Lint all crates
+mise run test:all          # Test all crates
+
+# Workspace-wide
+mise run build              # Build all crates
+mise run check              # Format + lint + build
+mise run test               # Run all tests
+mise run lint               # Run clippy on workspace
+```
+
+## Skills Reference
+
+Load skills using: `skill <skill-name>`
+
+| Skill | When to Use |
+|-------|-------------|
+| `rust-best-practices` | Writing idiomatic Rust, error handling, ownership patterns |
+| `rust-engineer` | Complex Rust architecture, async Rust, FFI |
+| `rust-async-patterns` | Tokio, async traits, concurrent patterns |
+| `code:debug` | Debugging broken code, errors, unexpected behavior |
+| `oracle:testing` | Stub-driven TDD, layer boundary testing |
+| `spec:orchestrator` | Determine which spec skill to use |
+| `spec:research` | Discovery and architecture for new features |
+| `spec:plan` | Break specs into implementable tasks |
+| `spec:implement` | Execute implementation from approved plan |
+| `spec:finish` | Post-implementation completion workflow |
+| `beads` | Track work across sessions with dependencies |
+| `code:stacked-commit` | Manage stacked commits with Graphite |
+| `code:git-worktrees` | Create isolated worktrees for features |

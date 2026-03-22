@@ -23,8 +23,5 @@ fn test_format_log_key() {
     // but this test documents the expected format
     assert_eq!(format!("log:{:020}", 0), "log:00000000000000000000");
     assert_eq!(format!("log:{:020}", 42), "log:00000000000000000042");
-    assert_eq!(
-        format!("log:{:020}", u64::MAX),
-        "log:18446744073709551615"
-    );
+    assert_eq!(format!("log:{:020}", u64::MAX), "log:18446744073709551615");
 }

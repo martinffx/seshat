@@ -201,7 +201,10 @@ impl MemStorage {
     ///
     /// # Errors
     /// Returns error if deserialization fails.
-    pub fn set_hard_state_from_bytes(&self, bytes: &[u8]) -> Result<(), prost_old::DecodeError> {
+    pub fn set_hard_state_from_bytes(
+        &self,
+        bytes: &[u8],
+    ) -> std::result::Result<(), prost_old::DecodeError> {
         let hs = HardState::decode(bytes)?;
         self.set_hard_state(hs);
         Ok(())
@@ -244,7 +247,7 @@ impl MemStorage {
     pub fn set_conf_state_from_bytes(
         &self,
         bytes: &[u8],
-    ) -> Result<(), prost_old::DecodeError> {
+    ) -> std::result::Result<(), prost_old::DecodeError> {
         let cs = ConfState::decode(bytes)?;
         self.set_conf_state(cs);
         Ok(())
@@ -339,17 +342,17 @@ impl raft::Storage for MemStorage {
             .expect("MemStorage: entries lock poisoned");
 
         if entries.is_empty() {
-            return Err(RaftStorageError::Unavailable);
+            return Err(raft::Error::Store(RaftStorageError::Unavailable));
         }
 
         let offset = entries[0].index;
 
         if low < offset {
-            return Err(RaftStorageError::Compacted);
+            return Err(raft::Error::Store(RaftStorageError::Compacted));
         }
 
         if high > entries.last().unwrap().index + 1 {
-            return Err(RaftStorageError::Unavailable);
+            return Err(raft::Error::Store(RaftStorageError::Unavailable));
         }
 
         let lo = (low - offset) as usize;
@@ -381,11 +384,11 @@ impl raft::Storage for MemStorage {
         let offset = entries[0].index;
 
         if idx < offset {
-            return Err(RaftStorageError::Compacted);
+            return Err(raft::Error::Store(RaftStorageError::Compacted));
         }
 
         if idx > entries.last().unwrap().index {
-            return Err(RaftStorageError::Unavailable);
+            return Err(raft::Error::Store(RaftStorageError::Unavailable));
         }
 
         let pos = (idx - offset) as usize;
@@ -453,10 +456,11 @@ mod tests {
     fn test_hard_state_serialization() {
         let storage = MemStorage::new();
 
-        let mut hs = HardState::default();
-        hs.term = 5;
-        hs.vote = 1;
-        hs.commit = 10;
+        let hs = HardState {
+            term: 5,
+            vote: 1,
+            commit: 10,
+        };
 
         storage.set_hard_state(hs.clone());
 
@@ -473,8 +477,10 @@ mod tests {
     fn test_conf_state_serialization() {
         let storage = MemStorage::new();
 
-        let mut cs = ConfState::default();
-        cs.voters = vec![1, 2, 3];
+        let cs = ConfState {
+            voters: vec![1, 2, 3],
+            ..Default::default()
+        };
 
         storage.set_conf_state(cs.clone());
 

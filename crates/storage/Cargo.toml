@@ -32,7 +32,13 @@ anyhow = { workspace = true }
 async-trait = "0.1"
 
 # Storage backend - RocksDB
-rocksdb = { version = "0.22", default-features = false }
+rocksdb = { version = "0.22", default-features = false, features = ["multi-threaded-cf"] }
+
+# Safe self-referential structs (eliminates unsafe transmute)
+ouroboros = "0.18"
+
+# Efficient RwLock without poisoning
+parking_lot = "0.12"
 
 # ============================================================================
 # Legacy raft-rs dependencies (will be removed after OpenRaft migration)

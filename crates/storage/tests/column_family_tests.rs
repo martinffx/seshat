@@ -32,7 +32,10 @@ fn test_as_str_strings_are_valid_rocksdb_names() {
         assert!(!name.is_empty(), "CF name should not be empty");
 
         // No null bytes
-        assert!(!name.contains('\0'), "CF name should not contain null bytes");
+        assert!(
+            !name.contains('\0'),
+            "CF name should not contain null bytes"
+        );
 
         // Lowercase and underscores only (snake_case convention)
         assert!(
@@ -85,11 +88,7 @@ fn test_all_returns_consistent_order() {
     let second = ColumnFamily::all();
 
     for (i, (a, b)) in first.iter().zip(second.iter()).enumerate() {
-        assert_eq!(
-            a, b,
-            "all() should return consistent order at index {}",
-            i
-        );
+        assert_eq!(a, b, "all() should return consistent order at index {}", i);
     }
 }
 
@@ -208,9 +207,9 @@ fn test_debug_trait() {
 #[test]
 fn test_clone_trait() {
     let original = ColumnFamily::DataKv;
-    let cloned = original.clone();
+    let cloned = original; // Copy instead of clone since Copy is implemented
 
-    assert_eq!(original, cloned, "Cloned value should equal original");
+    assert_eq!(original, cloned, "Copied value should equal original");
 }
 
 #[test]
@@ -249,14 +248,8 @@ fn test_hash_trait() {
     map.insert(ColumnFamily::SystemRaftLog, "log_data");
     map.insert(ColumnFamily::DataKv, "kv_data");
 
-    assert_eq!(
-        map.get(&ColumnFamily::SystemRaftLog),
-        Some(&"log_data")
-    );
-    assert_eq!(
-        map.get(&ColumnFamily::DataKv),
-        Some(&"kv_data")
-    );
+    assert_eq!(map.get(&ColumnFamily::SystemRaftLog), Some(&"log_data"));
+    assert_eq!(map.get(&ColumnFamily::DataKv), Some(&"kv_data"));
 }
 
 #[test]
@@ -333,10 +326,7 @@ fn test_no_cf_is_both_log_and_state() {
 #[test]
 fn test_string_conversion_is_unique() {
     // Each CF should have a unique string representation
-    let strings: HashSet<_> = ColumnFamily::all()
-        .iter()
-        .map(|cf| cf.as_str())
-        .collect();
+    let strings: HashSet<_> = ColumnFamily::all().iter().map(|cf| cf.as_str()).collect();
 
     assert_eq!(
         strings.len(),

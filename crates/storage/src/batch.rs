@@ -53,7 +53,7 @@ pub struct WriteBatch {
 
 /// A single operation in a batch (internal representation).
 #[derive(Debug, Clone)]
-enum BatchOperation {
+pub(crate) enum BatchOperation {
     /// Put operation: store key-value pair
     Put {
         cf: ColumnFamily,

@@ -154,10 +154,7 @@ impl StorageOptions {
         if self.max_write_buffer_number < 2 || self.max_write_buffer_number > 10 {
             return Err(StorageError::InvalidConfig {
                 field: "max_write_buffer_number".to_string(),
-                reason: format!(
-                    "must be between 2-10, got {}",
-                    self.max_write_buffer_number
-                ),
+                reason: format!("must be between 2-10, got {}", self.max_write_buffer_number),
             });
         }
 
@@ -195,7 +192,7 @@ impl StorageOptions {
             compaction_style: DBCompactionStyle::Level,
             disable_auto_compactions: false,
             level0_file_num_compaction_trigger: 2, // Aggressive compaction
-            write_buffer_size: None,                // Use global setting
+            write_buffer_size: None,               // Use global setting
             prefix_extractor: None,
         };
 
@@ -272,20 +269,40 @@ impl StorageOptions {
 ///     prefix_extractor: None,
 /// };
 /// ```
-#[derive(Debug, Clone)]
 pub struct CFOptions {
-    /// Compaction strategy (Level, Universal, FIFO)
     pub compaction_style: DBCompactionStyle,
-
-    /// Disable automatic compactions (for small state CFs)
     pub disable_auto_compactions: bool,
-
-    /// Number of L0 files to trigger compaction
     pub level0_file_num_compaction_trigger: i32,
-
-    /// Write buffer size override (None = use global setting)
     pub write_buffer_size: Option<usize>,
-
-    /// Prefix extractor for bloom filters (used in DataKv for efficient range scans)
     pub prefix_extractor: Option<SliceTransform>,
+}
+
+impl Clone for CFOptions {
+    fn clone(&self) -> Self {
+        Self {
+            compaction_style: self.compaction_style,
+            disable_auto_compactions: self.disable_auto_compactions,
+            level0_file_num_compaction_trigger: self.level0_file_num_compaction_trigger,
+            write_buffer_size: self.write_buffer_size,
+            prefix_extractor: self
+                .prefix_extractor
+                .as_ref()
+                .map(|_| SliceTransform::create_fixed_prefix(16)),
+        }
+    }
+}
+
+impl std::fmt::Debug for CFOptions {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CFOptions")
+            .field("compaction_style", &self.compaction_style)
+            .field("disable_auto_compactions", &self.disable_auto_compactions)
+            .field(
+                "level0_file_num_compaction_trigger",
+                &self.level0_file_num_compaction_trigger,
+            )
+            .field("write_buffer_size", &self.write_buffer_size)
+            .field("prefix_extractor", &self.prefix_extractor.is_some())
+            .finish()
+    }
 }
