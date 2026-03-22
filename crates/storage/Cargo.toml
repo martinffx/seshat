@@ -19,6 +19,7 @@ openraft = { version = "0.9", features = ["storage-v2"] }
 # Serialization
 serde = { workspace = true }
 bincode = { workspace = true }
+prost = "0.13"
 
 # Async runtime
 tokio = { workspace = true }
@@ -30,8 +31,17 @@ anyhow = { workspace = true }
 # Async traits
 async-trait = "0.1"
 
-# Storage backend (future)
-# rocksdb = { workspace = true }
+# Tracing for logging
+tracing = "0.1"
+
+# Storage backend - RocksDB
+rocksdb = { version = "0.22", default-features = false, features = ["multi-threaded-cf"] }
+
+# Safe self-referential structs (eliminates unsafe transmute)
+ouroboros = "0.18"
+
+# Efficient RwLock without poisoning
+parking_lot = "0.12"
 
 # ============================================================================
 # Legacy raft-rs dependencies (will be removed after OpenRaft migration)
@@ -49,3 +59,4 @@ prost-old = { package = "prost", version = "0.11" }
 tokio-test = { workspace = true }
 proptest = { workspace = true }
 serde_json = { workspace = true }
+tempfile = "3.8"
