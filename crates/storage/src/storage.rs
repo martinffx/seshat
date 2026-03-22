@@ -41,10 +41,6 @@ pub struct Storage {
     /// RocksDB database handle (thread-safe via Arc)
     db: Arc<DB>,
 
-    /// Storage configuration options
-    #[allow(dead_code)]
-    config: StorageOptions,
-
     /// Cache of last log index per log CF (for performance)
     last_log_index_cache: Arc<RwLock<HashMap<ColumnFamily, u64>>>,
 }
@@ -164,7 +160,6 @@ impl Storage {
         // Step 6: Create Storage instance
         let mut storage = Self {
             db,
-            config: options,
             last_log_index_cache,
         };
 
@@ -857,7 +852,7 @@ impl Storage {
     /// # Returns
     ///
     /// Ok(()) on success
-    fn update_cached_last_log_index(&self, cf: ColumnFamily, new_index: u64) -> Result<()> {
+    pub fn update_cached_last_log_index(&self, cf: ColumnFamily, new_index: u64) -> Result<()> {
         let mut cache = self.last_log_index_cache.write();
 
         cache.insert(cf, new_index);

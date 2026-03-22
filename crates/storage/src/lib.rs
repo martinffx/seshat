@@ -4,12 +4,13 @@
 //! - OpenRaft type configuration and core types
 //! - Operation definitions for state machine commands
 //! - In-memory storage backend (OpenRaftMemStorage)
+//! - RocksDB storage backend (OpenRaftRocksDBStorage)
 //! - State machine for applying operations
-//! - RocksDB storage backend (future)
 //! - Comprehensive error handling for storage operations
 
 // OpenRaft types and configuration
 pub mod openraft_mem;
+pub mod openraft_rocksdb;
 pub mod operations;
 pub mod state_machine;
 pub mod types;
@@ -25,6 +26,10 @@ pub mod storage;
 // Re-export commonly used types
 pub use openraft_mem::{
     OpenRaftMemLog, OpenRaftMemLogReader, OpenRaftMemSnapshotBuilder, OpenRaftMemStateMachine,
+};
+pub use openraft_rocksdb::{
+    DataRaft, RocksDBLogReader, RocksDBLogStorage, RocksDBSnapshotBuilder, RocksDBStateMachine,
+    SystemRaft,
 };
 pub use operations::{Operation, OperationError, OperationResult};
 pub use state_machine::StateMachine;
