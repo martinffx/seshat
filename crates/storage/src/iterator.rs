@@ -41,27 +41,55 @@ impl<'a> StorageIterator<'a> {
     }
 
     pub fn step_forward(&mut self) -> Result<Option<KeyValuePair>> {
-        if self.inner.valid() {
-            let key = self.inner.key().unwrap().to_vec().into_boxed_slice();
-            let value = self.inner.value().unwrap().to_vec().into_boxed_slice();
-            self.inner.next();
-            Ok(Some((key, value)))
-        } else {
+        if !self.inner.valid() {
             self.inner.status()?;
-            Ok(None)
+            return Ok(None);
         }
+
+        // Get key/value before advancing iterator
+        let key = match self.inner.key() {
+            Some(k) => k.to_vec().into_boxed_slice(),
+            None => {
+                self.inner.status()?;
+                return Ok(None);
+            }
+        };
+        let value = match self.inner.value() {
+            Some(v) => v.to_vec().into_boxed_slice(),
+            None => {
+                self.inner.status()?;
+                return Ok(None);
+            }
+        };
+
+        self.inner.next();
+        Ok(Some((key, value)))
     }
 
     pub fn step_backward(&mut self) -> Result<Option<KeyValuePair>> {
-        if self.inner.valid() {
-            let key = self.inner.key().unwrap().to_vec().into_boxed_slice();
-            let value = self.inner.value().unwrap().to_vec().into_boxed_slice();
-            self.inner.prev();
-            Ok(Some((key, value)))
-        } else {
+        if !self.inner.valid() {
             self.inner.status()?;
-            Ok(None)
+            return Ok(None);
         }
+
+        // Get key/value before advancing iterator
+        let key = match self.inner.key() {
+            Some(k) => k.to_vec().into_boxed_slice(),
+            None => {
+                self.inner.status()?;
+                return Ok(None);
+            }
+        };
+        let value = match self.inner.value() {
+            Some(v) => v.to_vec().into_boxed_slice(),
+            None => {
+                self.inner.status()?;
+                return Ok(None);
+            }
+        };
+
+        self.inner.prev();
+        Ok(Some((key, value)))
     }
 
     pub fn valid(&self) -> bool {

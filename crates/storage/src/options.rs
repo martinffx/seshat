@@ -68,7 +68,8 @@ pub struct StorageOptions {
     /// Target SST file size in MB (default: 64)
     pub target_file_size_mb: usize,
 
-    /// Maximum open file handles (-1 = unlimited)
+    /// Maximum open file handles (-1 = unlimited, 0 = use OS default, N = limit to N files)
+    /// Default: 1024 (reasonable limit to prevent file descriptor exhaustion)
     pub max_open_files: i32,
 
     /// Enable RocksDB statistics for observability (default: false)
@@ -87,7 +88,7 @@ impl Default for StorageOptions {
             write_buffer_size_mb: 64,
             max_write_buffer_number: 3,
             target_file_size_mb: 64,
-            max_open_files: -1,
+            max_open_files: 1024, // Reasonable limit to prevent file descriptor exhaustion
             enable_statistics: false,
             cf_options: Self::default_cf_options(),
         }

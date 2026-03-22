@@ -19,7 +19,7 @@ fn test_default_storage_options() {
     assert_eq!(opts.write_buffer_size_mb, 64);
     assert_eq!(opts.max_write_buffer_number, 3);
     assert_eq!(opts.target_file_size_mb, 64);
-    assert_eq!(opts.max_open_files, -1);
+    assert_eq!(opts.max_open_files, 1024);
     assert!(!opts.enable_statistics);
 
     // Verify all 6 column families have defaults
@@ -50,7 +50,7 @@ fn test_with_data_dir() {
     assert_eq!(opts.write_buffer_size_mb, 64);
     assert_eq!(opts.max_write_buffer_number, 3);
     assert_eq!(opts.target_file_size_mb, 64);
-    assert_eq!(opts.max_open_files, -1);
+    assert_eq!(opts.max_open_files, 1024);
     assert!(!opts.enable_statistics);
     assert_eq!(opts.cf_options.len(), 6);
 }

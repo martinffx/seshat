@@ -773,7 +773,9 @@ impl Storage {
 
         if should_invalidate_cache {
             // Delete all entries [1, last_index]
-            let last = last_index.unwrap();
+            // Safe: should_invalidate_cache is only true when last_index is Some
+            let last =
+                last_index.expect("BUG: should_invalidate_cache requires last_index to be Some");
             for index in 1..=last {
                 let key = format_log_key(index);
                 batch.delete_cf(&cf_handle, key.as_bytes());
@@ -789,11 +791,12 @@ impl Storage {
         // Step 5: Execute batch atomically
         self.db.write(batch)?;
 
-        // Step 6: Invalidate cache if entire log was deleted
-        if should_invalidate_cache {
-            let mut cache = self.last_log_index_cache.write();
-            cache.remove(&cf);
-        }
+        // Step 6: Invalidate cache after truncation
+        // After truncate, the cached last index is stale - either entries were deleted
+        // (partial truncate) or all entries were deleted (full truncate).
+        // Either way, we need to invalidate so get_last_log_index reads fresh from storage.
+        let mut cache = self.last_log_index_cache.write();
+        cache.remove(&cf);
 
         Ok(())
     }
@@ -934,6 +937,15 @@ impl Storage {
         // Step 1: Handle empty batch (no-op)
         if batch.is_empty() {
             return Ok(());
+        }
+
+        // Step 1b: Check batch size limit to prevent memory exhaustion
+        const MAX_BATCH_OPERATIONS: usize = 100_000;
+        if batch.operations().len() > MAX_BATCH_OPERATIONS {
+            return Err(StorageError::BatchTooLarge {
+                operations: batch.operations().len(),
+                max: MAX_BATCH_OPERATIONS,
+            });
         }
 
         // Step 2: Create RocksDB WriteBatch
@@ -1139,6 +1151,13 @@ impl Storage {
             });
         }
 
+        // Note: TOCTOU mitigation
+        // The canonical_path validation above ensures the target is within data_dir.
+        // Even if filesystem state changes between check and create_checkpoint(),
+        // an attacker cannot redirect to a path outside data_dir due to the
+        // canonicalization. The use of hard links (not copies) also limits
+        // the impact of any race condition.
+
         // Step 1: Create Checkpoint from DB
         let checkpoint = Checkpoint::new(&self.db)?;
 
@@ -1146,7 +1165,13 @@ impl Storage {
         // This creates hard links to all SST files (~10ms, no data copy)
         checkpoint.create_checkpoint(path)?;
 
-        // Step 3: Return Ok(())
+        // Step 3: Sync the parent directory to ensure checkpoint is durable
+        if let Some(parent) = path.parent() {
+            let dir = std::fs::OpenOptions::new().read(true).open(parent)?;
+            dir.sync_all()?;
+        }
+
+        // Step 4: Return Ok(())
         Ok(())
     }
 }

@@ -28,21 +28,22 @@ use openraft::storage::{
     Snapshot, SnapshotMeta,
 };
 use openraft::{
-    AnyError, Entry, ErrorSubject, ErrorVerb, LeaderId, LogId, OptionalSend,
-    StorageError, StorageIOError, StoredMembership, Vote,
+    AnyError, Entry, ErrorSubject, ErrorVerb, LeaderId, LogId, OptionalSend, StorageError,
+    StorageIOError, StoredMembership, Vote,
 };
 use prost::Message;
 use serde::{Deserialize, Serialize};
 
-use crate::{BasicNode, ColumnFamily, Operation, RaftTypeConfig, Request, Response, Storage};
+use crate::{
+    BasicNode, ColumnFamily, Operation, RaftTypeConfig, Request, Response, Storage, WriteBatch,
+};
 
 #[allow(dead_code)]
 const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 
 #[allow(dead_code)]
-fn decode_with_size_limit<T: Message + Default>(
-    data: &[u8],
-) -> Result<T, StorageError<u64>> {
+#[allow(clippy::result_large_err)]
+fn decode_with_size_limit<T: Message + Default>(data: &[u8]) -> Result<T, StorageError<u64>> {
     if data.len() > MAX_MESSAGE_SIZE {
         return Err(StorageError::IO {
             source: StorageIOError::new(
@@ -57,11 +58,7 @@ fn decode_with_size_limit<T: Message + Default>(
         });
     }
     T::decode(data).map_err(|e| StorageError::IO {
-        source: StorageIOError::new(
-            ErrorSubject::Store,
-            ErrorVerb::Read,
-            AnyError::error(e),
-        ),
+        source: StorageIOError::new(ErrorSubject::Store, ErrorVerb::Read, AnyError::error(e)),
     })
 }
 
@@ -118,6 +115,81 @@ const APPLIED_KEY: &[u8] = b"applied";
 const MEMBERSHIP_KEY: &[u8] = b"membership";
 const LAST_LOG_ID_KEY: &[u8] = b"__last_log_id";
 const LAST_PURGED_LOG_ID_KEY: &[u8] = b"__last_purged_log_id";
+
+/// Entry type markers for serialized log entries.
+///
+/// Format: [1-byte marker][payload bytes]
+/// - 0x00 = Blank
+/// - 0x01 = Normal (operation_bytes)
+/// - 0x02 = Membership (MembershipMessage protobuf)
+const ENTRY_TYPE_BLANK: u8 = 0x00;
+const ENTRY_TYPE_NORMAL: u8 = 0x01;
+const ENTRY_TYPE_MEMBERSHIP: u8 = 0x02;
+
+/// Serializes an entry payload to bytes with type marker.
+fn serialize_entry_payload(
+    payload: &openraft::EntryPayload<RaftTypeConfig>,
+    log_id: &LogId<u64>,
+) -> Vec<u8> {
+    match payload {
+        openraft::EntryPayload::Normal(req) => {
+            let mut buf = Vec::with_capacity(1 + req.operation_bytes.len());
+            buf.push(ENTRY_TYPE_NORMAL);
+            buf.extend_from_slice(&req.operation_bytes);
+            buf
+        }
+        openraft::EntryPayload::Blank => vec![ENTRY_TYPE_BLANK],
+        openraft::EntryPayload::Membership(m) => {
+            let membership = StoredMembership::new(Some(*log_id), m.clone());
+            let msg = MembershipMessage::from_stored_membership(&membership);
+            let mut buf = Vec::with_capacity(1 + msg.encoded_len());
+            buf.push(ENTRY_TYPE_MEMBERSHIP);
+            if let Err(e) = msg.encode(&mut buf) {
+                tracing::error!("Failed to encode membership: {}", e);
+                vec![ENTRY_TYPE_BLANK]
+            } else {
+                buf
+            }
+        }
+    }
+}
+
+/// Deserializes an entry payload from bytes with type marker.
+#[allow(clippy::result_large_err)]
+fn deserialize_entry_payload(
+    data: &[u8],
+) -> Result<openraft::EntryPayload<RaftTypeConfig>, StorageError<u64>> {
+    if data.is_empty() {
+        return Ok(openraft::EntryPayload::Blank);
+    }
+
+    let marker = data[0];
+    let payload_data = &data[1..];
+
+    match marker {
+        ENTRY_TYPE_BLANK => Ok(openraft::EntryPayload::Blank),
+        ENTRY_TYPE_NORMAL => Ok(openraft::EntryPayload::Normal(Request::new(
+            payload_data.to_vec(),
+        ))),
+        ENTRY_TYPE_MEMBERSHIP => {
+            let msg = MembershipMessage::decode(payload_data).map_err(|e| StorageError::IO {
+                source: StorageIOError::new(
+                    ErrorSubject::Log(LogId::default()),
+                    ErrorVerb::Read,
+                    AnyError::error(e),
+                ),
+            })?;
+            let stored = msg.to_membership();
+            Ok(openraft::EntryPayload::Membership(
+                stored.membership().clone(),
+            ))
+        }
+        _ => {
+            tracing::warn!("Unknown entry type marker: {}, treating as blank", marker);
+            Ok(openraft::EntryPayload::Blank)
+        }
+    }
+}
 
 // =============================================================================
 // Protobuf Message Types
@@ -289,7 +361,8 @@ impl<G: RaftGroup> RocksDBLogStorage<G> {
     fn get_last_log_id(&self, cf: ColumnFamily) -> crate::Result<Option<LogId<u64>>> {
         match self.storage.get(cf, LAST_LOG_ID_KEY) {
             Ok(Some(data)) => {
-                let msg = LogIdMessage::decode(&data[..]).map_err(crate::StorageError::ProtobufDecode)?;
+                let msg =
+                    LogIdMessage::decode(&data[..]).map_err(crate::StorageError::ProtobufDecode)?;
                 Ok(Some(msg.to_log_id()))
             }
             Ok(None) => {
@@ -301,20 +374,31 @@ impl<G: RaftGroup> RocksDBLogStorage<G> {
     }
 
     /// Find the last log entry by iterating backwards.
+    ///
+    /// This is a fallback when LAST_LOG_ID_KEY metadata is missing.
+    /// Extracts the log index from the key and reconstructs the LogId.
     fn find_last_log_entry(&self, cf: ColumnFamily) -> crate::Result<Option<LogId<u64>>> {
-        let mut iter = self.storage.iterator(cf, crate::iterator::IteratorMode::End)?;
-        
-        if let Some((_key, _value)) = iter.step_backward()? {
-            // The value contains the entry data
-            // Since we store only payload bytes (not the full Entry), we need to
-            // fall back to the index-based approach for entries without metadata
-            // In practice, if LAST_LOG_ID_KEY exists, we'll never reach here
-            // But if we do, we need another way to get the log_id
-            
-            // For now, return None - this handles the edge case where
-            // we're recovering from a partial state
+        let iter = self
+            .storage
+            .iterator(cf, crate::iterator::IteratorMode::End)?;
+
+        // Position at last entry
+        if iter.valid() {
+            // Parse key to extract index: format is "log:00000000000000000042"
+            if let Some(key) = iter.key() {
+                if let Ok(key_str) = std::str::from_utf8(&key) {
+                    if let Some(index_str) = key_str.strip_prefix("log:") {
+                        if let Ok(index) = index_str.parse::<u64>() {
+                            // We have the index but not the term.
+                            // Without term, we use (0, node_id) as best effort.
+                            // The caller should verify/repair using Raft protocol.
+                            return Ok(Some(LogId::new(LeaderId::new(0, 0), index)));
+                        }
+                    }
+                }
+            }
         }
-        
+
         Ok(None)
     }
 
@@ -329,7 +413,8 @@ impl<G: RaftGroup> RocksDBLogStorage<G> {
     fn get_last_purged_log_id(&self, cf: ColumnFamily) -> crate::Result<Option<LogId<u64>>> {
         match self.storage.get(cf, LAST_PURGED_LOG_ID_KEY) {
             Ok(Some(data)) => {
-                let msg = LogIdMessage::decode(&data[..]).map_err(crate::StorageError::ProtobufDecode)?;
+                let msg =
+                    LogIdMessage::decode(&data[..]).map_err(crate::StorageError::ProtobufDecode)?;
                 Ok(Some(msg.to_log_id()))
             }
             Ok(None) => Ok(None),
@@ -379,12 +464,8 @@ impl<G: RaftGroup> RaftLogReader<RaftTypeConfig> for RocksDBLogStorage<G> {
                     } else {
                         LogId::new(LeaderId::new(0, 0), index)
                     };
-                    
-                    let payload = if value.is_empty() {
-                        openraft::EntryPayload::Blank
-                    } else {
-                        openraft::EntryPayload::Normal(Request::new(value))
-                    };
+
+                    let payload = deserialize_entry_payload(&value)?;
                     entries.push(Entry { log_id, payload });
                 }
                 Ok(None) => {
@@ -423,7 +504,8 @@ impl<G: RaftGroup> RocksDBLogReader<G> {
     fn get_last_log_id(&self, cf: ColumnFamily) -> crate::Result<Option<LogId<u64>>> {
         match self.storage.get(cf, LAST_LOG_ID_KEY) {
             Ok(Some(data)) => {
-                let msg = LogIdMessage::decode(&data[..]).map_err(crate::StorageError::ProtobufDecode)?;
+                let msg =
+                    LogIdMessage::decode(&data[..]).map_err(crate::StorageError::ProtobufDecode)?;
                 Ok(Some(msg.to_log_id()))
             }
             Ok(None) => Ok(None),
@@ -470,12 +552,8 @@ impl<G: RaftGroup> RaftLogReader<RaftTypeConfig> for RocksDBLogReader<G> {
                     } else {
                         LogId::new(LeaderId::new(0, 0), index)
                     };
-                    
-                    let payload = if value.is_empty() {
-                        openraft::EntryPayload::Blank
-                    } else {
-                        openraft::EntryPayload::Normal(Request::new(value))
-                    };
+
+                    let payload = deserialize_entry_payload(&value)?;
                     entries.push(Entry { log_id, payload });
                 }
                 Ok(None) => {
@@ -500,23 +578,25 @@ impl<G: RaftGroup> RaftLogReader<RaftTypeConfig> for RocksDBLogReader<G> {
 impl<G: RaftGroup> RaftLogStorage<RaftTypeConfig> for RocksDBLogStorage<G> {
     type LogReader = RocksDBLogReader<G>;
 
-    async fn get_log_state(
-        &mut self,
-    ) -> Result<LogState<RaftTypeConfig>, StorageError<u64>> {
-        let last_log_id = self.get_last_log_id(G::LOG_CF).map_err(|e| StorageError::IO {
-            source: StorageIOError::new(
-                ErrorSubject::Store,
-                ErrorVerb::Read,
-                AnyError::error(e.to_string()),
-            ),
-        })?;
-        let last_purged_log_id = self.get_last_purged_log_id(G::LOG_CF).map_err(|e| StorageError::IO {
-            source: StorageIOError::new(
-                ErrorSubject::Store,
-                ErrorVerb::Read,
-                AnyError::error(e.to_string()),
-            ),
-        })?;
+    async fn get_log_state(&mut self) -> Result<LogState<RaftTypeConfig>, StorageError<u64>> {
+        let last_log_id = self
+            .get_last_log_id(G::LOG_CF)
+            .map_err(|e| StorageError::IO {
+                source: StorageIOError::new(
+                    ErrorSubject::Store,
+                    ErrorVerb::Read,
+                    AnyError::error(e.to_string()),
+                ),
+            })?;
+        let last_purged_log_id =
+            self.get_last_purged_log_id(G::LOG_CF)
+                .map_err(|e| StorageError::IO {
+                    source: StorageIOError::new(
+                        ErrorSubject::Store,
+                        ErrorVerb::Read,
+                        AnyError::error(e.to_string()),
+                    ),
+                })?;
 
         Ok(LogState {
             last_purged_log_id,
@@ -559,14 +639,12 @@ impl<G: RaftGroup> RaftLogStorage<RaftTypeConfig> for RocksDBLogStorage<G> {
         // Read from storage
         match self.storage.get(G::STATE_CF, VOTE_KEY) {
             Ok(Some(bytes)) => {
-                let msg = VoteMessage::decode(&bytes[..]).map_err(|e| {
-                    StorageError::IO {
-                        source: StorageIOError::new(
-                            ErrorSubject::Vote,
-                            ErrorVerb::Read,
-                            AnyError::error(e),
-                        ),
-                    }
+                let msg = VoteMessage::decode(&bytes[..]).map_err(|e| StorageError::IO {
+                    source: StorageIOError::new(
+                        ErrorSubject::Vote,
+                        ErrorVerb::Read,
+                        AnyError::error(e),
+                    ),
                 })?;
 
                 let vote = msg.to_vote();
@@ -600,31 +678,29 @@ impl<G: RaftGroup> RaftLogStorage<RaftTypeConfig> for RocksDBLogStorage<G> {
         I::IntoIter: OptionalSend,
     {
         let mut last_log_id: Option<LogId<u64>> = None;
+        let mut batch = WriteBatch::new();
 
         for entry in entries {
             let index = entry.log_id.index;
             let log_id = entry.log_id;
 
-            let bytes = match &entry.payload {
-                openraft::EntryPayload::Normal(req) => req.operation_bytes.clone(),
-                openraft::EntryPayload::Blank => Vec::new(),
-                openraft::EntryPayload::Membership(_) => Vec::new(),
-            };
-
+            let bytes = serialize_entry_payload(&entry.payload, &log_id);
             let key = format_log_key(index);
 
-            if let Err(e) = self.storage.put(G::LOG_CF, key.as_bytes(), &bytes) {
-                callback.log_io_completed(Err(std::io::Error::other(e.to_string())));
-                return Err(StorageError::IO {
-                    source: StorageIOError::new(
-                        ErrorSubject::Log(log_id),
-                        ErrorVerb::Write,
-                        AnyError::error(e),
-                    ),
-                });
-            }
-
+            batch.put(G::LOG_CF, key.as_bytes(), &bytes);
             last_log_id = Some(log_id);
+        }
+
+        // Execute batch write atomically
+        if let Err(e) = self.storage.batch_write(batch) {
+            callback.log_io_completed(Err(std::io::Error::other(e.to_string())));
+            return Err(StorageError::IO {
+                source: StorageIOError::new(
+                    ErrorSubject::Logs,
+                    ErrorVerb::Write,
+                    AnyError::error(e),
+                ),
+            });
         }
 
         // Update LAST_LOG_ID_KEY metadata with the last entry's LogId
@@ -641,7 +717,9 @@ impl<G: RaftGroup> RaftLogStorage<RaftTypeConfig> for RocksDBLogStorage<G> {
             }
 
             // Update last log index cache
-            let _ = self.storage.update_cached_last_log_index(G::LOG_CF, log_id.index);
+            let _ = self
+                .storage
+                .update_cached_last_log_index(G::LOG_CF, log_id.index);
         }
 
         callback.log_io_completed(Ok(()));
@@ -737,30 +815,29 @@ impl<G: RaftGroup> RocksDBSnapshotBuilder<G> {
     fn new(storage: Arc<Storage>) -> Self {
         Self {
             storage,
-            snapshot_id: format!("snapshot-{}", std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs()),
+            snapshot_id: format!(
+                "snapshot-{}",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs()
+            ),
             _marker: PhantomData,
         }
     }
 }
 
 impl<G: RaftGroup> RaftSnapshotBuilder<RaftTypeConfig> for RocksDBSnapshotBuilder<G> {
-    async fn build_snapshot(
-        &mut self,
-    ) -> Result<Snapshot<RaftTypeConfig>, StorageError<u64>> {
+    async fn build_snapshot(&mut self) -> Result<Snapshot<RaftTypeConfig>, StorageError<u64>> {
         // Read applied state from storage
         let applied = match self.storage.get(G::STATE_CF, APPLIED_KEY) {
             Ok(Some(bytes)) => {
-                let msg = LogIdMessage::decode(&bytes[..]).map_err(|e| {
-                    StorageError::IO {
-                        source: StorageIOError::new(
-                            ErrorSubject::StateMachine,
-                            ErrorVerb::Read,
-                            AnyError::error(e),
-                        ),
-                    }
+                let msg = LogIdMessage::decode(&bytes[..]).map_err(|e| StorageError::IO {
+                    source: StorageIOError::new(
+                        ErrorSubject::StateMachine,
+                        ErrorVerb::Read,
+                        AnyError::error(e),
+                    ),
                 })?;
                 Some(msg.to_log_id())
             }
@@ -779,14 +856,12 @@ impl<G: RaftGroup> RaftSnapshotBuilder<RaftTypeConfig> for RocksDBSnapshotBuilde
         // Read membership from storage
         let membership = match self.storage.get(G::STATE_CF, MEMBERSHIP_KEY) {
             Ok(Some(bytes)) => {
-                let msg = MembershipMessage::decode(&bytes[..]).map_err(|e| {
-                    StorageError::IO {
-                        source: StorageIOError::new(
-                            ErrorSubject::StateMachine,
-                            ErrorVerb::Read,
-                            AnyError::error(e),
-                        ),
-                    }
+                let msg = MembershipMessage::decode(&bytes[..]).map_err(|e| StorageError::IO {
+                    source: StorageIOError::new(
+                        ErrorSubject::StateMachine,
+                        ErrorVerb::Read,
+                        AnyError::error(e),
+                    ),
                 })?;
                 msg.to_membership()
             }
@@ -827,24 +902,16 @@ impl<G: RaftGroup> RaftStateMachine<RaftTypeConfig> for RocksDBStateMachine<G> {
 
     async fn applied_state(
         &mut self,
-    ) -> Result<
-        (
-            Option<LogId<u64>>,
-            StoredMembership<u64, BasicNode>,
-        ),
-        StorageError<u64>,
-    > {
+    ) -> Result<(Option<LogId<u64>>, StoredMembership<u64, BasicNode>), StorageError<u64>> {
         // Read applied state from storage
         let applied = match self.storage.get(G::STATE_CF, APPLIED_KEY) {
             Ok(Some(bytes)) => {
-                let msg = LogIdMessage::decode(&bytes[..]).map_err(|e| {
-                    StorageError::IO {
-                        source: StorageIOError::new(
-                            ErrorSubject::StateMachine,
-                            ErrorVerb::Read,
-                            AnyError::error(e),
-                        ),
-                    }
+                let msg = LogIdMessage::decode(&bytes[..]).map_err(|e| StorageError::IO {
+                    source: StorageIOError::new(
+                        ErrorSubject::StateMachine,
+                        ErrorVerb::Read,
+                        AnyError::error(e),
+                    ),
                 })?;
                 Some(msg.to_log_id())
             }
@@ -863,14 +930,12 @@ impl<G: RaftGroup> RaftStateMachine<RaftTypeConfig> for RocksDBStateMachine<G> {
         // Read membership from storage
         let membership = match self.storage.get(G::STATE_CF, MEMBERSHIP_KEY) {
             Ok(Some(bytes)) => {
-                let msg = MembershipMessage::decode(&bytes[..]).map_err(|e| {
-                    StorageError::IO {
-                        source: StorageIOError::new(
-                            ErrorSubject::StateMachine,
-                            ErrorVerb::Read,
-                            AnyError::error(e),
-                        ),
-                    }
+                let msg = MembershipMessage::decode(&bytes[..]).map_err(|e| StorageError::IO {
+                    source: StorageIOError::new(
+                        ErrorSubject::StateMachine,
+                        ErrorVerb::Read,
+                        AnyError::error(e),
+                    ),
                 })?;
                 msg.to_membership()
             }
@@ -916,20 +981,38 @@ impl<G: RaftGroup> RaftStateMachine<RaftTypeConfig> for RocksDBStateMachine<G> {
                     if let Some(kv_cf) = G::KV_CF {
                         match Operation::deserialize(&req.operation_bytes) {
                             Ok(Operation::Set { key, value }) => {
-                                if let Err(e) = self.storage.put(kv_cf, &key, &value) {
-                                    tracing::warn!("Failed to apply Set operation: {}", e);
-                                }
+                                self.storage.put(kv_cf, &key, &value).map_err(|e| {
+                                    StorageError::IO {
+                                        source: StorageIOError::new(
+                                            ErrorSubject::StateMachine,
+                                            ErrorVerb::Write,
+                                            AnyError::error(e),
+                                        ),
+                                    }
+                                })?;
                                 Response::new(b"OK".to_vec())
                             }
                             Ok(Operation::Del { key }) => {
-                                if let Err(e) = self.storage.delete(kv_cf, &key) {
-                                    tracing::warn!("Failed to apply Del operation: {}", e);
-                                }
+                                self.storage
+                                    .delete(kv_cf, &key)
+                                    .map_err(|e| StorageError::IO {
+                                        source: StorageIOError::new(
+                                            ErrorSubject::StateMachine,
+                                            ErrorVerb::Write,
+                                            AnyError::error(e),
+                                        ),
+                                    })?;
                                 Response::new(b"OK".to_vec())
                             }
                             Err(e) => {
                                 tracing::error!("Failed to deserialize operation: {}", e);
-                                Response::new(b"ERROR: Invalid operation".to_vec())
+                                return Err(StorageError::IO {
+                                    source: StorageIOError::new(
+                                        ErrorSubject::StateMachine,
+                                        ErrorVerb::Read,
+                                        AnyError::error(e),
+                                    ),
+                                });
                             }
                         }
                     } else {
@@ -1004,8 +1087,31 @@ impl<G: RaftGroup> RaftStateMachine<RaftTypeConfig> for RocksDBStateMachine<G> {
     ) -> Result<(), StorageError<u64>> {
         let snapshot_data = snapshot.into_inner();
 
+        // Validate snapshot_id is not empty
+        if meta.snapshot_id.is_empty() {
+            return Err(StorageError::IO {
+                source: StorageIOError::new(
+                    ErrorSubject::Snapshot(None),
+                    ErrorVerb::Read,
+                    AnyError::error("Empty snapshot ID"),
+                ),
+            });
+        }
+
         // For RocksDB snapshots, we expect the snapshot_id to be a checkpoint path
-        // For now, just validate the snapshot data
+        // Validate the checkpoint directory exists
+        let checkpoint_path = std::path::Path::new(&meta.snapshot_id);
+        if !checkpoint_path.exists() {
+            return Err(StorageError::IO {
+                source: StorageIOError::new(
+                    ErrorSubject::Snapshot(None),
+                    ErrorVerb::Read,
+                    AnyError::error("Checkpoint directory does not exist"),
+                ),
+            });
+        }
+
+        // Validate snapshot data is not empty (but not empty string which is valid)
         if snapshot_data.is_empty() {
             return Err(StorageError::IO {
                 source: StorageIOError::new(
@@ -1297,17 +1403,17 @@ mod tests {
         // Test that LogIdMessage correctly preserves all metadata
         let log_id = LogId::new(LeaderId::new(5, 42), 100);
         let msg = LogIdMessage::from_log_id(&log_id);
-        
+
         // Verify all fields are preserved
         assert_eq!(msg.term, 5);
         assert_eq!(msg.node_id, 42);
         assert_eq!(msg.index, 100);
-        
+
         // Verify roundtrip
         let bytes = msg.encode_to_vec();
         let decoded = LogIdMessage::decode(&bytes[..]).unwrap();
         let roundtrip_log_id = decoded.to_log_id();
-        
+
         assert_eq!(roundtrip_log_id.leader_id.term, 5);
         assert_eq!(roundtrip_log_id.leader_id.node_id, 42);
         assert_eq!(roundtrip_log_id.index, 100);
@@ -1318,11 +1424,11 @@ mod tests {
         // Test LogIdMessage with zero term/node_id (edge case)
         let log_id = LogId::new(LeaderId::new(0, 0), 1);
         let msg = LogIdMessage::from_log_id(&log_id);
-        
+
         assert_eq!(msg.term, 0);
         assert_eq!(msg.node_id, 0);
         assert_eq!(msg.index, 1);
-        
+
         let decoded = msg.to_log_id();
         assert_eq!(decoded.leader_id.term, 0);
         assert_eq!(decoded.leader_id.node_id, 0);
@@ -1333,11 +1439,11 @@ mod tests {
         // Test with maximum u64 values
         let log_id = LogId::new(LeaderId::new(u64::MAX, u64::MAX), u64::MAX);
         let msg = LogIdMessage::from_log_id(&log_id);
-        
+
         assert_eq!(msg.term, u64::MAX);
         assert_eq!(msg.node_id, u64::MAX);
         assert_eq!(msg.index, u64::MAX);
-        
+
         let decoded = msg.to_log_id();
         assert_eq!(decoded.leader_id.term, u64::MAX);
         assert_eq!(decoded.leader_id.node_id, u64::MAX);
