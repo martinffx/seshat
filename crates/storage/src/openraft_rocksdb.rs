@@ -35,7 +35,8 @@ use prost::Message;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    BasicNode, ColumnFamily, Operation, RaftTypeConfig, Request, Response, Storage, WriteBatch,
+    BasicNode, ColumnFamily, Direction, IteratorMode, Operation, RaftTypeConfig, Request, Response,
+    Storage, WriteBatch,
 };
 
 #[allow(dead_code)]
@@ -532,44 +533,55 @@ impl<G: RaftGroup> RaftLogReader<RaftTypeConfig> for RocksDBLogReader<G> {
             std::ops::Bound::Unbounded => u64::MAX,
         };
 
-        // Get the last LogId from metadata to use as reference
         let last_log_id = self.get_last_log_id(G::LOG_CF).ok().flatten();
 
-        let mut entries = Vec::new();
-        for index in start..=end {
-            let key = format_log_key(index);
-            match self.storage.get(G::LOG_CF, key.as_bytes()) {
-                Ok(Some(value)) => {
-                    // Construct LogId: use stored metadata if available and index matches
-                    let log_id = if let Some(ref last) = last_log_id {
-                        if index <= last.index {
-                            LogId::new(
-                                LeaderId::new(last.leader_id.term, last.leader_id.node_id),
-                                index,
-                            )
-                        } else {
-                            LogId::new(LeaderId::new(0, 0), index)
-                        }
-                    } else {
-                        LogId::new(LeaderId::new(0, 0), index)
-                    };
-
-                    let payload = deserialize_entry_payload(&value)?;
-                    entries.push(Entry { log_id, payload });
-                }
-                Ok(None) => {
-                    // Key doesn't exist, skip
-                }
-                Err(e) => {
-                    return Err(StorageError::IO {
-                        source: StorageIOError::new(
-                            ErrorSubject::Store,
-                            ErrorVerb::Read,
-                            AnyError::error(e),
-                        ),
-                    });
-                }
+        let start_key = format_log_key(start);
+        let mut iter = match self.storage.iterator(
+            G::LOG_CF,
+            IteratorMode::From(start_key.into_bytes(), Direction::Forward),
+        ) {
+            Ok(iter) => iter,
+            Err(e) => {
+                return Err(StorageError::IO {
+                    source: StorageIOError::new(
+                        ErrorSubject::Store,
+                        ErrorVerb::Read,
+                        AnyError::error(e),
+                    ),
+                });
             }
+        };
+
+        let mut entries = Vec::new();
+
+        while let Some((key, value)) = iter.step_forward().map_err(|e| StorageError::IO {
+            source: StorageIOError::new(
+                ErrorSubject::Store,
+                ErrorVerb::Read,
+                AnyError::error(e),
+            ),
+        })? {
+            let index = match parse_log_key(&key) {
+                Some(idx) => idx,
+                None => continue,
+            };
+
+            if index > end {
+                break;
+            }
+
+            let log_id = if let Some(ref last) = last_log_id {
+                if index <= last.index {
+                    LogId::new(LeaderId::new(last.leader_id.term, last.leader_id.node_id), index)
+                } else {
+                    LogId::new(LeaderId::new(0, 0), index)
+                }
+            } else {
+                LogId::new(LeaderId::new(0, 0), index)
+            };
+
+            let payload = deserialize_entry_payload(&value)?;
+            entries.push(Entry { log_id, payload });
         }
 
         Ok(entries)
