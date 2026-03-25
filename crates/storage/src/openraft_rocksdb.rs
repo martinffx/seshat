@@ -329,6 +329,7 @@ impl MembershipMessage {
 /// RocksDB-backed log storage for OpenRaft.
 ///
 /// Implements `RaftLogStorage` trait for persisting log entries and vote state.
+#[derive(Clone)]
 pub struct RocksDBLogStorage<G: RaftGroup> {
     storage: Arc<Storage>,
     cached_vote: Arc<parking_lot::RwLock<Option<Vote<u64>>>>,
@@ -778,6 +779,7 @@ impl<G: RaftGroup> RaftLogStorage<RaftTypeConfig> for RocksDBLogStorage<G> {
 /// RocksDB-backed state machine for OpenRaft.
 ///
 /// Implements `RaftStateMachine` trait for applying entries and managing snapshots.
+#[derive(Clone)]
 pub struct RocksDBStateMachine<G: RaftGroup> {
     storage: Arc<Storage>,
     cached_applied: Arc<parking_lot::RwLock<Option<LogId<u64>>>>,

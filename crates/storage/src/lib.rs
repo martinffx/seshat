@@ -29,8 +29,8 @@ pub use openraft_mem::{
     OpenRaftMemLog, OpenRaftMemLogReader, OpenRaftMemSnapshotBuilder, OpenRaftMemStateMachine,
 };
 pub use openraft_rocksdb::{
-    DataRaft, RocksDBLogReader, RocksDBLogStorage, RocksDBSnapshotBuilder, RocksDBStateMachine,
-    SystemRaft,
+    DataRaft, LogIdMessage, RocksDBLogReader, RocksDBLogStorage, RocksDBSnapshotBuilder,
+    RocksDBStateMachine, SystemRaft,
 };
 pub use operations::{Operation, OperationError, OperationResult};
 pub use state_machine::StateMachine;
