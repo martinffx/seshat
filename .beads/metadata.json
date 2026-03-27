@@ -1,7 +1,0 @@
-{
-  "database": "dolt",
-  "backend": "dolt",
-  "dolt_mode": "server",
-  "dolt_database": "seshat",
-  "project_id": "7d625c99-88fe-45f2-a09d-5a708e9688cc"
-}
