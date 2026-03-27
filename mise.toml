@@ -190,6 +190,124 @@ run = "cargo expand -p ${1:-seshat}"
 description = "Show dependency tree"
 run = "cargo tree --workspace"
 
+# Storage crate tasks
+[tasks."storage:build"]
+description = "Build seshat-storage crate"
+run = "cargo build --package seshat-storage"
+
+[tasks."storage:check"]
+description = "Check seshat-storage for errors"
+run = "cargo check --package seshat-storage"
+
+[tasks."storage:fmt"]
+description = "Format seshat-storage"
+run = "cargo fmt --package seshat-storage"
+
+[tasks."storage:fmt-check"]
+description = "Check seshat-storage formatting"
+run = "cargo fmt --package seshat-storage -- --check"
+
+[tasks."storage:clippy"]
+description = "Run clippy on seshat-storage"
+run = "cargo clippy --package seshat-storage -- -D warnings"
+
+[tasks."storage:test"]
+description = "Run seshat-storage tests"
+run = "cargo test --package seshat-storage"
+
+[tasks."storage:all"]
+description = "Build, format, lint, and test seshat-storage"
+depends = ["storage:check", "storage:fmt-check", "storage:clippy", "storage:test"]
+
+# Generic project tasks (usage: mise check:PROJECT)
+# Projects: storage, kv, resp, seshat, protocol
+[tasks."check:storage"]
+description = "Check seshat-storage"
+run = "cargo check --package seshat-storage"
+
+[tasks."check:kv"]
+description = "Check seshat-kv"
+run = "cargo check --package seshat-kv"
+
+[tasks."check:resp"]
+description = "Check seshat-resp"
+run = "cargo check --package seshat-resp"
+
+[tasks."check:seshat"]
+description = "Check seshat binary"
+run = "cargo check --package seshat"
+
+[tasks."check:protocol"]
+description = "Check protocol crate"
+run = "cargo check --package protocol"
+
+[tasks."check:all"]
+description = "Check all crates"
+run = "cargo check --workspace"
+
+# Format tasks
+[tasks."fmt:storage"]
+description = "Format seshat-storage"
+run = "cargo fmt --package seshat-storage"
+
+[tasks."fmt:kv"]
+description = "Format seshat-kv"
+run = "cargo fmt --package seshat-kv"
+
+[tasks."fmt:resp"]
+description = "Format seshat-resp"
+run = "cargo fmt --package seshat-resp"
+
+[tasks."fmt:seshat"]
+description = "Format seshat binary"
+run = "cargo fmt --package seshat"
+
+[tasks."fmt:all"]
+description = "Format all crates"
+run = "cargo fmt --workspace"
+
+# Lint tasks
+[tasks."lint:storage"]
+description = "Lint seshat-storage"
+run = "cargo clippy --package seshat-storage -- -D warnings"
+
+[tasks."lint:kv"]
+description = "Lint seshat-kv"
+run = "cargo clippy --package seshat-kv -- -D warnings"
+
+[tasks."lint:resp"]
+description = "Lint seshat-resp"
+run = "cargo clippy --package seshat-resp -- -D warnings"
+
+[tasks."lint:seshat"]
+description = "Lint seshat binary"
+run = "cargo clippy --package seshat -- -D warnings"
+
+[tasks."lint:all"]
+description = "Lint all crates"
+run = "cargo clippy --workspace -- -D warnings"
+
+# Test tasks
+[tasks."test:storage"]
+description = "Test seshat-storage"
+run = "cargo test --package seshat-storage"
+
+[tasks."test:kv"]
+description = "Test seshat-kv"
+run = "cargo test --package seshat-kv"
+
+[tasks."test:resp"]
+description = "Test seshat-resp"
+run = "cargo test --package seshat-resp"
+
+[tasks."test:seshat"]
+description = "Test seshat binary"
+run = "cargo test --package seshat"
+
+[tasks."test:all"]
+description = "Test all crates"
+run = "cargo test --workspace"
+
 # Git hooks (optional)
 [tasks."hooks:install"]
 description = "Install git pre-commit hooks"
