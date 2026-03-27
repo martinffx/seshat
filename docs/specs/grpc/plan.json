@@ -3,7 +3,7 @@
   "spec": "docs/specs/grpc/spec.md",
   "goal": "Replace StubNetwork with production gRPC transport for OpenRaft RPC communication between nodes",
   "total_tasks": 18,
-  "status": "in_progress",
+  "status": "pending",
   "dependencies": ["openraft"],
 
   "phases": [
@@ -16,23 +16,23 @@
           "id": "T1",
           "name": "Define NetworkError types",
           "depends_on": [],
-          "status": "done",
+          "status": "pending",
           "files": {
             "create": ["crates/raft/src/network/error.rs"],
             "modify": []
           },
-          "notes": "Completed. NetworkError enum with variants: ConnectionFailed, Timeout, RpcFailed, Serialization, Deserialization, NodeNotFound, MaxRetriesExceeded. Includes is_transient() method and comprehensive tests."
+          "notes": "NetworkError enum with variants: ConnectionFailed, Timeout, RpcFailed, Serialization, Deserialization, NodeNotFound, MaxRetriesExceeded. Includes is_transient() method and comprehensive tests."
         },
         {
           "id": "T2",
           "name": "Error type conversions",
           "depends_on": ["T1"],
-          "status": "done",
+          "status": "pending",
           "files": {
             "create": ["crates/raft/src/network/error_conversions.rs"],
             "modify": ["crates/raft/src/network/mod.rs"]
           },
-          "notes": "Completed. Conversion chain: tonic::Status → NetworkError → openraft::RPCError. Helper functions with node context. 35+ tests covering all gRPC status codes."
+          "notes": "Conversion chain: tonic::Status → NetworkError → openraft::RPCError. Helper functions with node context. Tests covering all gRPC status codes."
         }
       ]
     },
@@ -45,34 +45,34 @@
           "id": "T3",
           "name": "Define Raft protobuf schema",
           "depends_on": [],
-          "status": "done",
+          "status": "pending",
           "files": {
             "create": ["crates/raft/proto/raft.proto"],
             "modify": []
           },
-          "notes": "Completed 2025-11-03. raft.proto (246 lines) defines VoteRequest, VoteResponse, AppendEntriesRequest, AppendEntriesResponse, InstallSnapshotRequest, InstallSnapshotResponse, LogEntry, and RaftService."
+          "notes": "raft.proto defines VoteRequest, VoteResponse, AppendEntriesRequest, AppendEntriesResponse, InstallSnapshotRequest, InstallSnapshotResponse, LogEntry, and RaftService."
         },
         {
           "id": "T4",
           "name": "Generate Rust types from proto",
           "depends_on": ["T3"],
-          "status": "done",
+          "status": "pending",
           "files": {
             "create": ["crates/raft/build.rs", "crates/raft/src/proto/mod.rs"],
             "modify": []
           },
-          "notes": "Completed 2025-11-03. tonic-build generates Rust types, 20 proto validation tests passing."
+          "notes": "tonic-build generates Rust types from proto definitions."
         },
         {
           "id": "T5",
           "name": "Protobuf type conversions",
           "depends_on": ["T4"],
-          "status": "in_progress",
+          "status": "pending",
           "files": {
-            "create": ["crates/raft/src/proto/conversions.rs", "crates/raft/tests/proto_conversions_test.rs"],
+            "create": ["crates/raft/src/proto/conversions.rs"],
             "modify": []
           },
-          "notes": "Stubs created in src/proto/conversions.rs, 36 tests written in tests/proto_conversions_test.rs. Awaiting implementation of bidirectional conversions between protobuf and OpenRaft types."
+          "notes": "Bidirectional conversions between protobuf messages and OpenRaft types."
         },
         {
           "id": "T6",
@@ -80,8 +80,8 @@
           "depends_on": ["T5"],
           "status": "pending",
           "files": {
-            "create": [],
-            "modify": ["crates/raft/tests/proto_conversions_test.rs"]
+            "create": ["crates/raft/tests/proto_conversions_test.rs"],
+            "modify": []
           },
           "notes": "Round-trip serialization tests. Verify binary encoding size is reasonable."
         }
@@ -180,7 +180,7 @@
           "files": {
             "modify": ["crates/raft/src/grpc_client.rs"]
           },
-          "notes": "Max 3 retry attempts, exponential backoff (1s, 2s, 4s), returns error after all retries exhausted."
+          "notes": "Max 3 retry attempts, exponential backoff (50ms, 100ms, 200ms), returns error after all retries exhausted."
         },
         {
           "id": "T15",
@@ -208,7 +208,7 @@
             "create": ["crates/raft/src/network.rs"],
             "modify": ["crates/kv/src/raft_node.rs"]
           },
-          "notes": "send_vote(), send_append_entries(), send_install_snapshot() call gRPC client. Returns Result with proper error types."
+          "notes": "vote(), append_entries(), install_snapshot() methods call gRPC client via RPCOption for timeout control. Returns Result with proper error types."
         },
         {
           "id": "T17",

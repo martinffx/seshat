@@ -123,7 +123,7 @@ The gRPC network layer consists of four primary components that work together to
 Implements the `openraft::RaftNetwork<RaftTypeConfig>` trait, serving as the bridge between OpenRaft's consensus logic and the gRPC transport layer. This is the primary interface that OpenRaft uses to send RPCs to peer nodes.
 
 **Responsibilities:**
-- Implements OpenRaft's RaftNetwork trait with required methods: send_vote, send_append_entries, send_install_snapshot
+- Implements OpenRaft's RaftNetwork trait with required methods: vote, append_entries, install_snapshot
 - Manages connection pool to peer nodes, retrieving or establishing connections as needed
 - Coordinates retry logic for transient failures, delegating to RaftGrpcClient
 - Routes Raft RPC calls to appropriate gRPC clients based on target node_id
@@ -134,6 +134,27 @@ Implements the `openraft::RaftNetwork<RaftTypeConfig>` trait, serving as the bri
 - Lazy connection initialization - connections established on first RPC to a peer, not at startup
 - Failed connections evicted from pool and retried on next call
 - All methods are async, returning futures that resolve to Result types
+
+**OpenRaft Network API:**
+
+The spec uses the modern OpenRaft API:
+
+```rust
+// RaftNetworkFactory creates network instances per target
+impl RaftNetworkFactory<RaftTypeConfig> for GrpcNetworkFactory {
+    type Network = GrpcNetworkConnection;
+    async fn new_client(&mut self, target: NodeId, node: &BasicNode) -> Self::Network;
+}
+
+// RaftNetwork handles actual RPC calls with RPCOption for timeout control
+impl RaftNetwork<RaftTypeConfig> for GrpcNetworkConnection {
+    async fn append_entries(&mut self, rpc: AppendEntriesRequest<RaftTypeConfig>, option: RPCOption) -> Result<...>;
+    async fn vote(&mut self, rpc: VoteRequest<u64>, option: RPCOption) -> Result<...>;
+    async fn install_snapshot(&mut self, rpc: InstallSnapshotRequest<RaftTypeConfig>, option: RPCOption) -> Result<...>;
+}
+```
+
+**Note:** The old `send_append_entries()`, `send_vote()`, `send_install_snapshot()` methods are **deprecated**. Use the new API signature that accepts `RPCOption` for timeout control.
 
 #### RaftGrpcServer
 
