@@ -167,8 +167,10 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
+    type MockData = Arc<Mutex<HashMap<(ColumnFamily, Vec<u8>), Vec<u8>>>>;
+
     struct MockStorage {
-        data: Arc<Mutex<HashMap<(ColumnFamily, Vec<u8>), Vec<u8>>>>,
+        data: MockData,
     }
 
     impl MockStorage {

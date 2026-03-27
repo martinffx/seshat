@@ -8,11 +8,11 @@
 //! - Data persistence across storage restarts
 
 use openraft::storage::{RaftLogReader, RaftLogStorage, RaftSnapshotBuilder, RaftStateMachine};
-use openraft::{Entry, LogId, LeaderId, Vote};
+use openraft::{Entry, LeaderId, LogId, Vote};
 use prost::Message;
 use seshat_storage::{
-    DataRaft, LogIdMessage, Operation, RaftTypeConfig, Request,
-    RocksDBLogStorage, RocksDBStateMachine, Storage, StorageOptions, SystemRaft,
+    DataRaft, LogIdMessage, Operation, RaftTypeConfig, Request, RocksDBLogStorage,
+    RocksDBStateMachine, Storage, StorageOptions, SystemRaft,
 };
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -84,9 +84,7 @@ async fn test_rocksdb_log_storage_get_log_reader() {
     let (storage, _dir) = create_test_storage();
     let mut log_storage = RocksDBLogStorage::<DataRaft>::new(Arc::clone(&storage));
 
-    let mut reader = log_storage
-        .get_log_reader()
-        .await;
+    let mut reader = log_storage.get_log_reader().await;
 
     let retrieved = reader
         .try_get_log_entries(1..=10)
@@ -121,9 +119,7 @@ async fn test_rocksdb_log_storage_truncate() {
         .expect("truncate should succeed");
 
     // Verify remaining entries
-    let mut reader = log_storage
-        .get_log_reader()
-        .await;
+    let mut reader = log_storage.get_log_reader().await;
 
     let retrieved = reader
         .try_get_log_entries(1..=5)
@@ -213,7 +209,11 @@ async fn test_rocksdb_state_machine_apply_del_operation() {
 
     // First set a value directly in storage
     storage
-        .put(seshat_storage::ColumnFamily::DataKv, b"del_key", b"del_value")
+        .put(
+            seshat_storage::ColumnFamily::DataKv,
+            b"del_key",
+            b"del_value",
+        )
         .expect("put should succeed");
 
     let operation = Operation::Del {
@@ -432,9 +432,7 @@ async fn test_rocksdb_state_machine_snapshot_builder() {
         .expect("apply should succeed");
 
     // Build snapshot
-    let mut builder = state_machine
-        .get_snapshot_builder()
-        .await;
+    let mut builder = state_machine.get_snapshot_builder().await;
 
     let snapshot = builder
         .build_snapshot()
@@ -536,9 +534,7 @@ async fn test_log_entries_persist_across_storage_restart() {
 
         assert_eq!(state.last_log_id.unwrap().index, 5);
 
-        let mut reader = log_storage
-            .get_log_reader()
-            .await;
+        let mut reader = log_storage.get_log_reader().await;
 
         let retrieved = reader
             .try_get_log_entries(1..=5)

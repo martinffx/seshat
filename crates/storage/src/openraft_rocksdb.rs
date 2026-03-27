@@ -555,11 +555,7 @@ impl<G: RaftGroup> RaftLogReader<RaftTypeConfig> for RocksDBLogReader<G> {
         let mut entries = Vec::new();
 
         while let Some((key, value)) = iter.step_forward().map_err(|e| StorageError::IO {
-            source: StorageIOError::new(
-                ErrorSubject::Store,
-                ErrorVerb::Read,
-                AnyError::error(e),
-            ),
+            source: StorageIOError::new(ErrorSubject::Store, ErrorVerb::Read, AnyError::error(e)),
         })? {
             let index = match parse_log_key(&key) {
                 Some(idx) => idx,
@@ -572,7 +568,10 @@ impl<G: RaftGroup> RaftLogReader<RaftTypeConfig> for RocksDBLogReader<G> {
 
             let log_id = if let Some(ref last) = last_log_id {
                 if index <= last.index {
-                    LogId::new(LeaderId::new(last.leader_id.term, last.leader_id.node_id), index)
+                    LogId::new(
+                        LeaderId::new(last.leader_id.term, last.leader_id.node_id),
+                        index,
+                    )
                 } else {
                     LogId::new(LeaderId::new(0, 0), index)
                 }
