@@ -1,7 +1,11 @@
 {
+<<<<<<< HEAD
   "database": "dolt",
   "backend": "dolt",
   "dolt_mode": "server",
   "dolt_database": "rocksdb",
   "project_id": "0e38e228-eefb-4032-99ce-8678da337f11"
+=======
+  "database": "dolt"
+>>>>>>> 70dcf38e4609abbfd243c84ce60d3cffa37dc915
 }

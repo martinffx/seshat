@@ -1,0 +1,23 @@
+    pub fn iterator(&self, cf: ColumnFamily, mode: IteratorMode) -> Result<StorageIterator> {
+        // Step 1: Get CF handle
+        let cf_handle = self.get_cf_handle(cf)?;
+
+        // Step 2: Convert our IteratorMode to RocksDB's IteratorMode
+        let rocks_mode = match mode {
+            IteratorMode::Start => RocksIteratorMode::Start,
+            IteratorMode::End => RocksIteratorMode::End,
+            IteratorMode::From(key, direction) => {
+                let rocks_direction = match direction {
+                    Direction::Forward => rocksdb::Direction::Forward,
+                    Direction::Reverse => rocksdb::Direction::Reverse,
+                };
+                RocksIteratorMode::From(&key, rocks_direction)
+            }
+        };
+
+        // Step 3: Create RocksDB iterator
+        let db_iter = self.db.iterator_cf(cf_handle, rocks_mode);
+
+        // Step 4: Wrap in StorageIterator
+        Ok(StorageIterator::new(db_iter, cf))
+    }
